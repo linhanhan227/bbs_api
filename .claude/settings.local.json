@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(php -v)",
+      "Bash(composer --version)",
+      "Read(//c//**)",
+      "Bash(where php *)",
+      "Bash(where composer *)",
+      "Read(//d/phpstudy_pro/Extensions/php/**)",
+      "Read(//d/phpstudy_pro/Extensions/**)",
+      "Bash(/d/phpstudy_pro/Extensions/php/php8.2.9nts/php.exe -v)",
+      "Bash(unzip -o -q php8.2.9nts.zip)",
+      "Bash(powershell -Command \"Expand-Archive -Path 'D:\\\\phpstudy_pro\\\\Extensions\\\\php\\\\php8.2.9nts\\\\php8.2.9nts.zip' -DestinationPath 'D:\\\\phpstudy_pro\\\\Extensions\\\\php\\\\php8.2.9nts\\\\' -Force\")",
+      "Bash(npm -v)",
+      "Bash(npm --version)"
+    ]
+  }
+}

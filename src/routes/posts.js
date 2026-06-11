@@ -1,0 +1,251 @@
+const router = require('express').Router();
+const { Op } = require('sequelize');
+const { Post, Comment, Like, Favorite, User } = require('../models');
+const { authRequired } = require('../middleware/auth');
+const { validateIdParam, parsePage, notify } = require('../utils/helpers');
+
+const AUTHOR_ATTRS = ['id', 'nickname', 'avatar'];
+
+router.use(authRequired);
+
+function parseImages(raw) {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function serializePost(post, currentUserId) {
+  const json = post.toJSON();
+  json.images = parseImages(json.images);
+  if (json.likes) {
+    json.likeCount = json.likes.length;
+    json.liked = json.likes.some(l => l.userId === currentUserId);
+    delete json.likes;
+  }
+  return json;
+}
+
+// 发布动态
+router.post('/', async (req, res, next) => {
+  try {
+    const { content, images } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ code: 400, message: '内容不能为空' });
+    }
+    if (images !== undefined && !Array.isArray(images)) {
+      return res.status(400).json({ code: 400, message: 'images 必须是数组' });
+    }
+    const post = await Post.create({
+      userId: req.user.id,
+      content: content.trim(),
+      images: Array.isArray(images) && images.length ? JSON.stringify(images) : null
+    });
+    res.status(201).json({ code: 0, message: '发布成功', data: serializePost(post, req.user.id) });
+  } catch (err) { next(err); }
+});
+
+// 我的收藏列表（必须定义在 /:id 之前，避免被参数路由吞掉）
+router.get('/favorites/mine', async (req, res, next) => {
+  try {
+    const { page, pageSize, offset, limit } = parsePage(req);
+    const { rows, count } = await Favorite.findAndCountAll({
+      where: { userId: req.user.id },
+      include: [{
+        model: Post, as: 'post',
+        include: [{ model: User, as: 'author', attributes: AUTHOR_ATTRS }]
+      }],
+      order: [['createdAt', 'DESC']],
+      offset, limit
+    });
+    const list = rows
+      .filter(f => f.post) // 动态可能已被删除
+      .map(f => {
+        const json = f.post.toJSON();
+        json.images = parseImages(json.images);
+        return { favoriteId: f.id, favoritedAt: f.createdAt, post: json };
+      });
+    res.json({ code: 0, data: { list, total: count, page, pageSize } });
+  } catch (err) { next(err); }
+});
+
+// 动态列表（广场，支持按用户筛选 + 关键词搜索）
+// GET /api/posts?userId=&keyword=&page=&pageSize=
+router.get('/', async (req, res, next) => {
+  try {
+    const { page, pageSize, offset, limit } = parsePage(req);
+    const where = {};
+    if (req.query.userId !== undefined) {
+      const uid = Number(req.query.userId);
+      if (!Number.isInteger(uid) || uid <= 0) {
+        return res.status(400).json({ code: 400, message: 'userId 必须是正整数' });
+      }
+      where.userId = uid;
+    }
+    if (req.query.keyword) {
+      where.content = { [Op.like]: `%${req.query.keyword}%` };
+    }
+
+    const { rows, count } = await Post.findAndCountAll({
+      where,
+      include: [
+        { model: User, as: 'author', attributes: AUTHOR_ATTRS },
+        { model: Like, as: 'likes', attributes: ['userId'] }
+      ],
+      order: [['createdAt', 'DESC']],
+      offset, limit,
+      distinct: true
+    });
+
+    res.json({
+      code: 0,
+      data: { list: rows.map(p => serializePost(p, req.user.id)), total: count, page, pageSize }
+    });
+  } catch (err) { next(err); }
+});
+
+// 动态详情（含评论、是否已收藏）
+router.get('/:id', validateIdParam('id'), async (req, res, next) => {
+  try {
+    const post = await Post.findByPk(req.params.id, {
+      include: [
+        { model: User, as: 'author', attributes: AUTHOR_ATTRS },
+        { model: Comment, as: 'comments', include: [{ model: User, as: 'author', attributes: AUTHOR_ATTRS }] },
+        { model: Like, as: 'likes', attributes: ['userId'] }
+      ],
+      order: [[{ model: Comment, as: 'comments' }, 'createdAt', 'ASC']]
+    });
+    if (!post) return res.status(404).json({ code: 404, message: '动态不存在' });
+
+    const json = serializePost(post, req.user.id);
+    const fav = await Favorite.findOne({ where: { postId: post.id, userId: req.user.id } });
+    json.favorited = !!fav;
+    res.json({ code: 0, data: json });
+  } catch (err) { next(err); }
+});
+
+// 删除自己的动态（连带评论、点赞、收藏）
+router.delete('/:id', validateIdParam('id'), async (req, res, next) => {
+  try {
+    const post = await Post.findByPk(req.params.id);
+    if (!post) return res.status(404).json({ code: 404, message: '动态不存在' });
+    if (post.userId !== req.user.id) {
+      return res.status(403).json({ code: 403, message: '只能删除自己的动态' });
+    }
+    await Promise.all([
+      Comment.destroy({ where: { postId: post.id } }),
+      Like.destroy({ where: { postId: post.id } }),
+      Favorite.destroy({ where: { postId: post.id } })
+    ]);
+    await post.destroy();
+    res.json({ code: 0, message: '已删除' });
+  } catch (err) { next(err); }
+});
+
+// 点赞（幂等：重复点赞返回 200 而非报错）
+router.put('/:id/like', validateIdParam('id'), async (req, res, next) => {
+  try {
+    const post = await Post.findByPk(req.params.id);
+    if (!post) return res.status(404).json({ code: 404, message: '动态不存在' });
+
+    const [, created] = await Like.findOrCreate({
+      where: { postId: post.id, userId: req.user.id }
+    });
+    if (created) {
+      await notify({ userId: post.userId, type: 'like', actorId: req.user.id, postId: post.id });
+    }
+    res.status(created ? 201 : 200).json({ code: 0, message: created ? '点赞成功' : '已点过赞', data: { liked: true } });
+  } catch (err) { next(err); }
+});
+
+// 取消点赞（幂等）
+router.delete('/:id/like', validateIdParam('id'), async (req, res, next) => {
+  try {
+    await Like.destroy({ where: { postId: req.params.id, userId: req.user.id } });
+    res.json({ code: 0, message: '已取消点赞', data: { liked: false } });
+  } catch (err) { next(err); }
+});
+
+// 收藏（幂等）
+router.put('/:id/favorite', validateIdParam('id'), async (req, res, next) => {
+  try {
+    const post = await Post.findByPk(req.params.id);
+    if (!post) return res.status(404).json({ code: 404, message: '动态不存在' });
+
+    const [, created] = await Favorite.findOrCreate({
+      where: { postId: post.id, userId: req.user.id }
+    });
+    res.status(created ? 201 : 200).json({ code: 0, message: created ? '收藏成功' : '已收藏过', data: { favorited: true } });
+  } catch (err) { next(err); }
+});
+
+// 取消收藏（幂等）
+router.delete('/:id/favorite', validateIdParam('id'), async (req, res, next) => {
+  try {
+    await Favorite.destroy({ where: { postId: req.params.id, userId: req.user.id } });
+    res.json({ code: 0, message: '已取消收藏', data: { favorited: false } });
+  } catch (err) { next(err); }
+});
+
+// 发表评论
+router.post('/:id/comments', validateIdParam('id'), async (req, res, next) => {
+  try {
+    const { content } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ code: 400, message: '评论内容不能为空' });
+    }
+    const post = await Post.findByPk(req.params.id);
+    if (!post) return res.status(404).json({ code: 404, message: '动态不存在' });
+
+    const comment = await Comment.create({
+      postId: post.id,
+      userId: req.user.id,
+      content: content.trim()
+    });
+    await notify({
+      userId: post.userId, type: 'comment', actorId: req.user.id,
+      postId: post.id, content: comment.content.slice(0, 100)
+    });
+    res.status(201).json({ code: 0, message: '评论成功', data: comment });
+  } catch (err) { next(err); }
+});
+
+// 评论列表（分页）
+router.get('/:id/comments', validateIdParam('id'), async (req, res, next) => {
+  try {
+    const post = await Post.findByPk(req.params.id);
+    if (!post) return res.status(404).json({ code: 404, message: '动态不存在' });
+
+    const { page, pageSize, offset, limit } = parsePage(req, 20, 100);
+    const { rows, count } = await Comment.findAndCountAll({
+      where: { postId: post.id },
+      include: [{ model: User, as: 'author', attributes: AUTHOR_ATTRS }],
+      order: [['createdAt', 'ASC']],
+      offset, limit
+    });
+    res.json({ code: 0, data: { list: rows, total: count, page, pageSize } });
+  } catch (err) { next(err); }
+});
+
+// 删除评论（评论作者或动态作者均可删除）
+router.delete('/:postId/comments/:commentId', validateIdParam('postId', 'commentId'), async (req, res, next) => {
+  try {
+    const comment = await Comment.findOne({
+      where: { id: req.params.commentId, postId: req.params.postId },
+      include: [{ model: Post, attributes: ['userId'] }]
+    });
+    if (!comment) return res.status(404).json({ code: 404, message: '评论不存在' });
+    const isCommentAuthor = comment.userId === req.user.id;
+    const isPostAuthor = comment.Post && comment.Post.userId === req.user.id;
+    if (!isCommentAuthor && !isPostAuthor) {
+      return res.status(403).json({ code: 403, message: '无权删除该评论' });
+    }
+    await comment.destroy();
+    res.json({ code: 0, message: '已删除' });
+  } catch (err) { next(err); }
+});
+
+module.exports = router;

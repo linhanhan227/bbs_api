@@ -1,0 +1,59 @@
+<%- include('partials/header', { title: '举报管理', admin, active }) %>
+
+<div class="card">
+  <h2>举报管理（<%= status === 'pending' ? '待处理' : status === 'resolved' ? '已处理' : '已驳回' %> <%= total %> 条）</h2>
+  <div class="search-bar">
+    <a class="btn <%= status === 'pending' ? 'btn-primary' : 'btn-default' %>" href="/admin/reports?status=pending">待处理</a>
+    <a class="btn <%= status === 'resolved' ? 'btn-primary' : 'btn-default' %>" href="/admin/reports?status=resolved">已处理</a>
+    <a class="btn <%= status === 'dismissed' ? 'btn-primary' : 'btn-default' %>" href="/admin/reports?status=dismissed">已驳回</a>
+  </div>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>举报人</th><th>类型</th><th>举报对象</th><th>原因</th><th>时间</th>
+        <% if (status === 'pending') { %><th>操作</th><% } %>
+      </tr>
+    </thead>
+    <tbody>
+      <% reports.forEach(r => { %>
+      <tr>
+        <td><%= r.id %></td>
+        <td><%= r.reporter ? r.reporter.nickname + ' (' + r.reporter.username + ')' : '已删除用户' %></td>
+        <td>
+          <%= r.targetType === 'user' ? '用户' : r.targetType === 'post' ? '动态' : '评论' %>
+          #<%= r.targetId %>
+        </td>
+        <td style="max-width:280px;word-break:break-all">
+          <%= r.targetSummary %>
+          <% if (r.targetType === 'user') { %>
+            <a href="/admin/users?keyword=" style="font-size:12px"></a>
+          <% } %>
+        </td>
+        <td style="max-width:240px;word-break:break-all"><%= r.reason %></td>
+        <td><%= new Date(r.createdAt).toLocaleString('zh-CN') %></td>
+        <% if (status === 'pending') { %>
+        <td>
+          <form class="inline" method="post" action="/admin/reports/<%= r.id %>/handle">
+            <input type="hidden" name="action" value="resolve">
+            <button class="btn btn-primary" type="submit">标记已处理</button>
+          </form>
+          <form class="inline" method="post" action="/admin/reports/<%= r.id %>/handle">
+            <input type="hidden" name="action" value="dismiss">
+            <button class="btn btn-default" type="submit">驳回</button>
+          </form>
+        </td>
+        <% } %>
+      </tr>
+      <% }) %>
+      <% if (!reports.length) { %>
+      <tr><td colspan="7" style="text-align:center;color:#999">暂无数据</td></tr>
+      <% } %>
+    </tbody>
+  </table>
+  <div class="pagination">
+    <% if (page > 1) { %><a class="btn btn-default" href="?status=<%= status %>&page=<%= page - 1 %>">上一页</a><% } %>
+    <span>第 <%= page %> / <%= totalPages %> 页</span>
+    <% if (page < totalPages) { %><a class="btn btn-default" href="?status=<%= status %>&page=<%= page + 1 %>">下一页</a><% } %>
+  </div>
+</div>
+
+<%- include('partials/footer') %>

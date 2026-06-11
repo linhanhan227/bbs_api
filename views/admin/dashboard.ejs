@@ -1,0 +1,29 @@
+<%- include('partials/header', { title: '仪表盘', admin, active }) %>
+
+<div class="stats-grid">
+  <div class="stat-card">注册用户<div class="num"><%= stats.userCount %></div></div>
+  <div class="stat-card">动态总数<div class="num"><%= stats.postCount %></div></div>
+  <div class="stat-card">评论总数<div class="num"><%= stats.commentCount %></div></div>
+  <div class="stat-card">好友对数<div class="num"><%= stats.friendshipCount %></div></div>
+</div>
+<br>
+<div class="stats-grid">
+  <div class="stat-card">私信总数<div class="num"><%= stats.messageCount %></div></div>
+  <div class="stat-card">今日新增用户<div class="num"><%= stats.todayUsers %></div></div>
+  <div class="stat-card">今日新增动态<div class="num"><%= stats.todayPosts %></div></div>
+  <div class="stat-card">封禁用户<div class="num" style="color:#ff4d4f"><%= stats.bannedCount %></div></div>
+</div>
+<br>
+<div class="stats-grid">
+  <div class="stat-card">
+    待处理举报
+    <div class="num" style="color:<%= stats.pendingReports > 0 ? '#faad14' : '#52c41a' %>">
+      <%= stats.pendingReports %>
+    </div>
+    <% if (stats.pendingReports > 0) { %>
+      <a href="/admin/reports" style="font-size:13px">去处理 →</a>
+    <% } %>
+  </div>
+</div>
+
+<%- include('partials/footer') %>

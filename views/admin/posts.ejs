@@ -1,0 +1,38 @@
+<%- include('partials/header', { title: '动态管理', admin, active }) %>
+
+<div class="card">
+  <h2>动态管理（共 <%= total %> 条）</h2>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>作者</th><th>内容</th><th>发布时间</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      <% posts.forEach(p => { %>
+      <tr>
+        <td><%= p.id %></td>
+        <td><%= p.author ? p.author.nickname + ' (' + p.author.username + ')' : '已删除用户' %></td>
+        <td style="max-width:480px;word-break:break-all">
+          <%= p.content.length > 100 ? p.content.slice(0, 100) + '…' : p.content %>
+        </td>
+        <td><%= p.createdAt.toLocaleString('zh-CN') %></td>
+        <td>
+          <form class="inline" method="post" action="/admin/posts/<%= p.id %>/delete"
+                onsubmit="return confirm('确定删除这条动态及其评论？')">
+            <button class="btn btn-danger" type="submit">删除</button>
+          </form>
+        </td>
+      </tr>
+      <% }) %>
+      <% if (!posts.length) { %>
+      <tr><td colspan="5" style="text-align:center;color:#999">暂无数据</td></tr>
+      <% } %>
+    </tbody>
+  </table>
+  <div class="pagination">
+    <% if (page > 1) { %><a class="btn btn-default" href="?page=<%= page - 1 %>">上一页</a><% } %>
+    <span>第 <%= page %> / <%= totalPages %> 页</span>
+    <% if (page < totalPages) { %><a class="btn btn-default" href="?page=<%= page + 1 %>">下一页</a><% } %>
+  </div>
+</div>
+
+<%- include('partials/footer') %>

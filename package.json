@@ -1,0 +1,23 @@
+{
+  "name": "friend-community-backend",
+  "version": "1.0.0",
+  "description": "基础交友社区后端（Express + Sequelize，MySQL/SQLite 双数据库支持）",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "cross-env NODE_ENV=production node src/server.js",
+    "dev": "cross-env NODE_ENV=development node src/server.js",
+    "test:run": "cross-env NODE_ENV=test node src/server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cross-env": "^7.0.3",
+    "dotenv": "^16.4.5",
+    "ejs": "^3.1.10",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.11.0",
+    "sequelize": "^6.37.3",
+    "sqlite3": "^5.1.7"
+  }
+}

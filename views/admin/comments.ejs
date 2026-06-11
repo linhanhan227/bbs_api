@@ -1,0 +1,42 @@
+<%- include('partials/header', { title: '评论管理', admin, active }) %>
+
+<div class="card">
+  <h2>评论管理（共 <%= total %> 条）</h2>
+  <form class="search-bar" method="get" action="/admin/comments">
+    <input type="text" name="keyword" placeholder="搜索评论内容" value="<%= keyword %>">
+    <button class="btn btn-primary" type="submit">搜索</button>
+    <% if (keyword) { %><a class="btn btn-default" href="/admin/comments">清除</a><% } %>
+  </form>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>评论者</th><th>内容</th><th>所属动态</th><th>时间</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      <% comments.forEach(c => { %>
+      <tr>
+        <td><%= c.id %></td>
+        <td><%= c.author ? c.author.nickname + ' (' + c.author.username + ')' : '已删除用户' %></td>
+        <td style="max-width:400px;word-break:break-all"><%= c.content %></td>
+        <td>#<%= c.postId %></td>
+        <td><%= c.createdAt.toLocaleString('zh-CN') %></td>
+        <td>
+          <form class="inline" method="post" action="/admin/comments/<%= c.id %>/delete"
+                onsubmit="return confirm('确定删除这条评论？')">
+            <button class="btn btn-danger" type="submit">删除</button>
+          </form>
+        </td>
+      </tr>
+      <% }) %>
+      <% if (!comments.length) { %>
+      <tr><td colspan="6" style="text-align:center;color:#999">暂无数据</td></tr>
+      <% } %>
+    </tbody>
+  </table>
+  <div class="pagination">
+    <% if (page > 1) { %><a class="btn btn-default" href="?page=<%= page - 1 %>&keyword=<%= encodeURIComponent(keyword) %>">上一页</a><% } %>
+    <span>第 <%= page %> / <%= totalPages %> 页</span>
+    <% if (page < totalPages) { %><a class="btn btn-default" href="?page=<%= page + 1 %>&keyword=<%= encodeURIComponent(keyword) %>">下一页</a><% } %>
+  </div>
+</div>
+
+<%- include('partials/footer') %>
