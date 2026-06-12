@@ -5,6 +5,7 @@ const {
   Follow, Block, Message, Notification, Report
 } = require('../models');
 const { adminRequired } = require('../middleware/auth');
+const { sequelize } = require('../config/database');
 
 // ===== 登录 / 登出 =====
 router.get('/login', (req, res) => {
@@ -108,30 +109,32 @@ router.post('/users/:id/delete', async (req, res, next) => {
   try {
     const user = await User.findOne({ where: { id: req.params.id, role: 'user' } });
     if (user) {
-      const uid = user.id;
-      const posts = await Post.findAll({ where: { userId: uid }, attributes: ['id'] });
-      const postIds = posts.map(p => p.id);
-      if (postIds.length) {
+      await sequelize.transaction(async (t) => {
+        const uid = user.id;
+        const posts = await Post.findAll({ where: { userId: uid }, attributes: ['id'], transaction: t });
+        const postIds = posts.map(p => p.id);
+        if (postIds.length) {
+          await Promise.all([
+            Comment.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
+            Like.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
+            Favorite.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
+            Notification.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t })
+          ]);
+        }
         await Promise.all([
-          Comment.destroy({ where: { postId: { [Op.in]: postIds } } }),
-          Like.destroy({ where: { postId: { [Op.in]: postIds } } }),
-          Favorite.destroy({ where: { postId: { [Op.in]: postIds } } }),
-          Notification.destroy({ where: { postId: { [Op.in]: postIds } } })
+          Post.destroy({ where: { userId: uid }, transaction: t }),
+          Comment.destroy({ where: { userId: uid }, transaction: t }),
+          Like.destroy({ where: { userId: uid }, transaction: t }),
+          Favorite.destroy({ where: { userId: uid }, transaction: t }),
+          Friendship.destroy({ where: { [Op.or]: [{ requesterId: uid }, { addresseeId: uid }] }, transaction: t }),
+          Follow.destroy({ where: { [Op.or]: [{ followerId: uid }, { followingId: uid }] }, transaction: t }),
+          Block.destroy({ where: { [Op.or]: [{ userId: uid }, { blockedId: uid }] }, transaction: t }),
+          Message.destroy({ where: { [Op.or]: [{ senderId: uid }, { receiverId: uid }] }, transaction: t }),
+          Notification.destroy({ where: { [Op.or]: [{ userId: uid }, { actorId: uid }] }, transaction: t }),
+          Report.destroy({ where: { reporterId: uid }, transaction: t })
         ]);
-      }
-      await Promise.all([
-        Post.destroy({ where: { userId: uid } }),
-        Comment.destroy({ where: { userId: uid } }),
-        Like.destroy({ where: { userId: uid } }),
-        Favorite.destroy({ where: { userId: uid } }),
-        Friendship.destroy({ where: { [Op.or]: [{ requesterId: uid }, { addresseeId: uid }] } }),
-        Follow.destroy({ where: { [Op.or]: [{ followerId: uid }, { followingId: uid }] } }),
-        Block.destroy({ where: { [Op.or]: [{ userId: uid }, { blockedId: uid }] } }),
-        Message.destroy({ where: { [Op.or]: [{ senderId: uid }, { receiverId: uid }] } }),
-        Notification.destroy({ where: { [Op.or]: [{ userId: uid }, { actorId: uid }] } }),
-        Report.destroy({ where: { reporterId: uid } })
-      ]);
-      await user.destroy();
+        await user.destroy({ transaction: t });
+      });
     }
     res.redirect('/admin/users');
   } catch (err) { next(err); }
@@ -161,12 +164,14 @@ router.get('/posts', async (req, res, next) => {
 
 router.post('/posts/:id/delete', async (req, res, next) => {
   try {
-    await Promise.all([
-      Comment.destroy({ where: { postId: req.params.id } }),
-      Like.destroy({ where: { postId: req.params.id } }),
-      Favorite.destroy({ where: { postId: req.params.id } })
-    ]);
-    await Post.destroy({ where: { id: req.params.id } });
+    await sequelize.transaction(async (t) => {
+      await Promise.all([
+        Comment.destroy({ where: { postId: req.params.id }, transaction: t }),
+        Like.destroy({ where: { postId: req.params.id }, transaction: t }),
+        Favorite.destroy({ where: { postId: req.params.id }, transaction: t })
+      ]);
+      await Post.destroy({ where: { id: req.params.id }, transaction: t });
+    });
     res.redirect(req.get('referer') || '/admin/posts');
   } catch (err) { next(err); }
 });

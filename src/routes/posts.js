@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const { Post, Comment, Like, Favorite, User } = require('../models');
 const { authRequired } = require('../middleware/auth');
 const { validateIdParam, parsePage, notify } = require('../utils/helpers');
+const { sequelize } = require('../config/database');
 
 const AUTHOR_ATTRS = ['id', 'nickname', 'avatar'];
 
@@ -56,7 +57,10 @@ router.get('/favorites/mine', async (req, res, next) => {
       where: { userId: req.user.id },
       include: [{
         model: Post, as: 'post',
-        include: [{ model: User, as: 'author', attributes: AUTHOR_ATTRS }]
+        include: [
+          { model: User, as: 'author', attributes: AUTHOR_ATTRS },
+          { model: Like, as: 'likes', attributes: ['userId'] }
+        ]
       }],
       order: [['createdAt', 'DESC']],
       offset, limit
@@ -64,8 +68,7 @@ router.get('/favorites/mine', async (req, res, next) => {
     const list = rows
       .filter(f => f.post) // 动态可能已被删除
       .map(f => {
-        const json = f.post.toJSON();
-        json.images = parseImages(json.images);
+        const json = serializePost(f.post, req.user.id);
         return { favoriteId: f.id, favoritedAt: f.createdAt, post: json };
       });
     res.json({ code: 0, data: { list, total: count, page, pageSize } });
@@ -135,12 +138,14 @@ router.delete('/:id', validateIdParam('id'), async (req, res, next) => {
     if (post.userId !== req.user.id) {
       return res.status(403).json({ code: 403, message: '只能删除自己的动态' });
     }
-    await Promise.all([
-      Comment.destroy({ where: { postId: post.id } }),
-      Like.destroy({ where: { postId: post.id } }),
-      Favorite.destroy({ where: { postId: post.id } })
-    ]);
-    await post.destroy();
+    await sequelize.transaction(async (t) => {
+      await Promise.all([
+        Comment.destroy({ where: { postId: post.id }, transaction: t }),
+        Like.destroy({ where: { postId: post.id }, transaction: t }),
+        Favorite.destroy({ where: { postId: post.id }, transaction: t })
+      ]);
+      await post.destroy({ transaction: t });
+    });
     res.json({ code: 0, message: '已删除' });
   } catch (err) { next(err); }
 });
