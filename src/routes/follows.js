@@ -1,7 +1,7 @@
 const router = require('express').Router();
-const { Follow, User, Block } = require('../models');
+const { Follow, User } = require('../models');
 const { authRequired } = require('../middleware/auth');
-const { validateIdParam, parsePage } = require('../utils/helpers');
+const { validateIdParam, parsePage, notify, isBlockedBetween } = require('../utils/helpers');
 
 const USER_ATTRS = ['id', 'nickname', 'gender', 'age', 'city', 'avatar'];
 
@@ -20,14 +20,13 @@ router.put('/:userId', validateIdParam('userId'), async (req, res, next) => {
       return res.status(403).json({ code: 403, message: '该用户已被封禁' });
     }
 
-    const blocked = await Block.findOne({ where: { userId: targetId, blockedId: req.user.id } });
+    const blocked = await isBlockedBetween(req.user.id, targetId);
     if (blocked) return res.status(403).json({ code: 403, message: '无法关注该用户' });
 
     const [, created] = await Follow.findOrCreate({
       where: { followerId: req.user.id, followingId: targetId }
     });
     if (created) {
-      const { notify } = require('../utils/helpers');
       await notify({ userId: targetId, type: 'follow', actorId: req.user.id });
     }
     res.status(created ? 201 : 200).json({ code: 0, message: created ? '关注成功' : '已关注过', data: { following: true } });

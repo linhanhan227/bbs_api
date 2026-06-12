@@ -1,8 +1,11 @@
 const router = require('express').Router();
 const { Op } = require('sequelize');
-const { Post, Comment, Like, Favorite, User } = require('../models');
+const { Post, Comment, Like, Favorite, User, Block } = require('../models');
 const { authRequired } = require('../middleware/auth');
-const { validateIdParam, parsePage, notify } = require('../utils/helpers');
+const {
+  validateIdParam, parsePage, notify, isBlockedBetween,
+  cascadeDeletePosts, cascadeDeleteComments
+} = require('../utils/helpers');
 const { sequelize } = require('../config/database');
 
 const AUTHOR_ATTRS = ['id', 'nickname', 'avatar'];
@@ -22,11 +25,11 @@ function parseImages(raw) {
 function serializePost(post, currentUserId) {
   const json = post.toJSON();
   json.images = parseImages(json.images);
-  if (json.likes) {
-    json.likeCount = json.likes.length;
-    json.liked = json.likes.some(l => l.userId === currentUserId);
-    delete json.likes;
-  }
+  // likes 可能未被 include（如刚发布的动态）；统一输出 likeCount/liked，保证响应结构一致
+  const likes = Array.isArray(json.likes) ? json.likes : [];
+  json.likeCount = likes.length;
+  json.liked = likes.some(l => l.userId === currentUserId);
+  delete json.likes;
   return json;
 }
 
@@ -34,7 +37,8 @@ function serializePost(post, currentUserId) {
 router.post('/', async (req, res, next) => {
   try {
     const { content, images } = req.body;
-    if (!content || !content.trim()) {
+    // 先判类型：content 非字符串（如客户端误传数字/对象）时 .trim() 会抛异常导致 500
+    if (typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ code: 400, message: '内容不能为空' });
     }
     if (images !== undefined && !Array.isArray(images)) {
@@ -63,7 +67,8 @@ router.get('/favorites/mine', async (req, res, next) => {
         ]
       }],
       order: [['createdAt', 'DESC']],
-      offset, limit
+      offset, limit,
+      distinct: true // 内层 include 了 Post->likes(hasMany),不加 distinct 会使 count 因 JOIN 放大而虚高
     });
     const list = rows
       .filter(f => f.post) // 动态可能已被删除
@@ -81,12 +86,29 @@ router.get('/', async (req, res, next) => {
   try {
     const { page, pageSize, offset, limit } = parsePage(req);
     const where = {};
+
+    // 排除与我有任一方向拉黑关系的用户的动态（与用户广场 users.js 保持一致）
+    const blockRows = await Block.findAll({
+      where: { [Op.or]: [{ userId: req.user.id }, { blockedId: req.user.id }] },
+      attributes: ['userId', 'blockedId']
+    });
+    const excludeIds = new Set();
+    for (const b of blockRows) {
+      excludeIds.add(b.userId === req.user.id ? b.blockedId : b.userId);
+    }
+
     if (req.query.userId !== undefined) {
       const uid = Number(req.query.userId);
       if (!Number.isInteger(uid) || uid <= 0) {
         return res.status(400).json({ code: 400, message: 'userId 必须是正整数' });
       }
+      // 精确筛选被拉黑用户：直接返回空列表
+      if (excludeIds.has(uid)) {
+        return res.json({ code: 0, data: { list: [], total: 0, page, pageSize } });
+      }
       where.userId = uid;
+    } else if (excludeIds.size) {
+      where.userId = { [Op.notIn]: [...excludeIds] };
     }
     if (req.query.keyword) {
       where.content = { [Op.like]: `%${req.query.keyword}%` };
@@ -123,6 +145,11 @@ router.get('/:id', validateIdParam('id'), async (req, res, next) => {
     });
     if (!post) return res.status(404).json({ code: 404, message: '动态不存在' });
 
+    // 与作者存在拉黑关系时视为不可见
+    if (await isBlockedBetween(req.user.id, post.userId)) {
+      return res.status(404).json({ code: 404, message: '动态不存在' });
+    }
+
     const json = serializePost(post, req.user.id);
     const fav = await Favorite.findOne({ where: { postId: post.id, userId: req.user.id } });
     json.favorited = !!fav;
@@ -139,12 +166,7 @@ router.delete('/:id', validateIdParam('id'), async (req, res, next) => {
       return res.status(403).json({ code: 403, message: '只能删除自己的动态' });
     }
     await sequelize.transaction(async (t) => {
-      await Promise.all([
-        Comment.destroy({ where: { postId: post.id }, transaction: t }),
-        Like.destroy({ where: { postId: post.id }, transaction: t }),
-        Favorite.destroy({ where: { postId: post.id }, transaction: t })
-      ]);
-      await post.destroy({ transaction: t });
+      await cascadeDeletePosts([post.id], t);
     });
     res.json({ code: 0, message: '已删除' });
   } catch (err) { next(err); }
@@ -155,6 +177,9 @@ router.put('/:id/like', validateIdParam('id'), async (req, res, next) => {
   try {
     const post = await Post.findByPk(req.params.id);
     if (!post) return res.status(404).json({ code: 404, message: '动态不存在' });
+    if (await isBlockedBetween(req.user.id, post.userId)) {
+      return res.status(403).json({ code: 403, message: '无法操作该动态' });
+    }
 
     const [, created] = await Like.findOrCreate({
       where: { postId: post.id, userId: req.user.id }
@@ -199,11 +224,15 @@ router.delete('/:id/favorite', validateIdParam('id'), async (req, res, next) => 
 router.post('/:id/comments', validateIdParam('id'), async (req, res, next) => {
   try {
     const { content } = req.body;
-    if (!content || !content.trim()) {
+    // 同上：先判类型，避免非字符串 content 触发 .trim() 异常 → 500
+    if (typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ code: 400, message: '评论内容不能为空' });
     }
     const post = await Post.findByPk(req.params.id);
     if (!post) return res.status(404).json({ code: 404, message: '动态不存在' });
+    if (await isBlockedBetween(req.user.id, post.userId)) {
+      return res.status(403).json({ code: 403, message: '无法评论该动态' });
+    }
 
     const comment = await Comment.create({
       postId: post.id,
@@ -248,7 +277,9 @@ router.delete('/:postId/comments/:commentId', validateIdParam('postId', 'comment
     if (!isCommentAuthor && !isPostAuthor) {
       return res.status(403).json({ code: 403, message: '无权删除该评论' });
     }
-    await comment.destroy();
+    await sequelize.transaction(async (t) => {
+      await cascadeDeleteComments([comment.id], t);
+    });
     res.json({ code: 0, message: '已删除' });
   } catch (err) { next(err); }
 });

@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { Notification, Block } = require('../models');
+const { Notification, Block, Comment, Like, Favorite, Post, Report } = require('../models');
 
 // 校验路径参数为正整数，否则返回 400（REST 规范：客户端错误不应产生 500）
 function validateIdParam(...names) {
@@ -45,4 +45,46 @@ async function isBlockedBetween(a, b) {
   return !!row;
 }
 
-module.exports = { validateIdParam, parsePage, notify, isBlockedBetween };
+// 级联删除动态:连带评论、点赞、收藏、关联通知、针对动态/其评论的举报，最后删动态本身。
+// 必须在事务中调用，保证一致性（各删除接口共用此逻辑，避免行为分叉）。
+async function cascadeDeletePosts(postIds, t) {
+  if (!postIds || !postIds.length) return;
+  const comments = await Comment.findAll({
+    where: { postId: { [Op.in]: postIds } },
+    attributes: ['id'],
+    transaction: t
+  });
+  const commentIds = comments.map(c => c.id);
+
+  await Promise.all([
+    Comment.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
+    Like.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
+    Favorite.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
+    Notification.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
+    Report.destroy({
+      where: {
+        [Op.or]: [
+          { targetType: 'post', targetId: { [Op.in]: postIds } },
+          ...(commentIds.length ? [{ targetType: 'comment', targetId: { [Op.in]: commentIds } }] : [])
+        ]
+      },
+      transaction: t
+    })
+  ]);
+  await Post.destroy({ where: { id: { [Op.in]: postIds } }, transaction: t });
+}
+
+// 级联删除评论:连带针对这些评论的举报，最后删评论本身。必须在事务中调用。
+async function cascadeDeleteComments(commentIds, t) {
+  if (!commentIds || !commentIds.length) return;
+  await Report.destroy({
+    where: { targetType: 'comment', targetId: { [Op.in]: commentIds } },
+    transaction: t
+  });
+  await Comment.destroy({ where: { id: { [Op.in]: commentIds } }, transaction: t });
+}
+
+module.exports = {
+  validateIdParam, parsePage, notify, isBlockedBetween,
+  cascadeDeletePosts, cascadeDeleteComments
+};

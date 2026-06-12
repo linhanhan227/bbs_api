@@ -34,8 +34,28 @@
         <td>
           <form class="inline" method="post" action="/admin/reports/<%= r.id %>/handle">
             <input type="hidden" name="action" value="resolve">
+            <input type="hidden" name="disposal" value="none">
             <button class="btn btn-primary" type="submit">标记已处理</button>
           </form>
+          <% if (r.targetType === 'user') { %>
+          <form class="inline" method="post" action="/admin/reports/<%= r.id %>/handle" onsubmit="return confirm('确认封禁该用户并标记已处理？')">
+            <input type="hidden" name="action" value="resolve">
+            <input type="hidden" name="disposal" value="ban_user">
+            <button class="btn btn-danger" type="submit">封禁并处理</button>
+          </form>
+          <% } else if (r.targetType === 'post') { %>
+          <form class="inline" method="post" action="/admin/reports/<%= r.id %>/handle" onsubmit="return confirm('确认删除该动态并标记已处理？')">
+            <input type="hidden" name="action" value="resolve">
+            <input type="hidden" name="disposal" value="delete_post">
+            <button class="btn btn-danger" type="submit">删除动态并处理</button>
+          </form>
+          <% } else if (r.targetType === 'comment') { %>
+          <form class="inline" method="post" action="/admin/reports/<%= r.id %>/handle" onsubmit="return confirm('确认删除该评论并标记已处理？')">
+            <input type="hidden" name="action" value="resolve">
+            <input type="hidden" name="disposal" value="delete_comment">
+            <button class="btn btn-danger" type="submit">删除评论并处理</button>
+          </form>
+          <% } %>
           <form class="inline" method="post" action="/admin/reports/<%= r.id %>/handle">
             <input type="hidden" name="action" value="dismiss">
             <button class="btn btn-default" type="submit">驳回</button>

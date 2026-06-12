@@ -94,7 +94,7 @@ router.get('/:id', validateIdParam('id'), async (req, res, next) => {
     }
 
     const targetId = user.id;
-    const [followerCount, followingCount, postCount, isFollowing, friendship, blockedByMe] = await Promise.all([
+    const [followerCount, followingCount, postCount, isFollowing, friendship, blockedByMe, blockedByOther] = await Promise.all([
       Follow.count({ where: { followingId: targetId } }),
       Follow.count({ where: { followerId: targetId } }),
       Post.count({ where: { userId: targetId } }),
@@ -108,8 +108,14 @@ router.get('/:id', validateIdParam('id'), async (req, res, next) => {
           ]
         }
       }),
-      Block.findOne({ where: { userId: req.user.id, blockedId: targetId } })
+      Block.findOne({ where: { userId: req.user.id, blockedId: targetId } }),
+      Block.findOne({ where: { userId: targetId, blockedId: req.user.id } })
     ]);
+
+    // 对方拉黑了我：不可查看其主页（我拉黑对方时仍可查看，便于解除）
+    if (blockedByOther && targetId !== req.user.id) {
+      return res.status(403).json({ code: 403, message: '无法查看该用户' });
+    }
 
     const { status, ...profile } = user.toJSON();
     res.json({

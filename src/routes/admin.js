@@ -6,6 +6,7 @@ const {
 } = require('../models');
 const { adminRequired } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
+const { cascadeDeletePosts, cascadeDeleteComments } = require('../utils/helpers');
 
 // ===== 登录 / 登出 =====
 router.get('/login', (req, res) => {
@@ -113,6 +114,18 @@ router.post('/users/:id/delete', async (req, res, next) => {
         const uid = user.id;
         const posts = await Post.findAll({ where: { userId: uid }, attributes: ['id'], transaction: t });
         const postIds = posts.map(p => p.id);
+        // 该用户作为作者的评论 + 其动态下的评论（用于清理这些评论的举报）
+        const comments = await Comment.findAll({
+          where: {
+            [Op.or]: [
+              { userId: uid },
+              ...(postIds.length ? [{ postId: { [Op.in]: postIds } }] : [])
+            ]
+          },
+          attributes: ['id'],
+          transaction: t
+        });
+        const commentIds = comments.map(c => c.id);
         if (postIds.length) {
           await Promise.all([
             Comment.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
@@ -131,7 +144,18 @@ router.post('/users/:id/delete', async (req, res, next) => {
           Block.destroy({ where: { [Op.or]: [{ userId: uid }, { blockedId: uid }] }, transaction: t }),
           Message.destroy({ where: { [Op.or]: [{ senderId: uid }, { receiverId: uid }] }, transaction: t }),
           Notification.destroy({ where: { [Op.or]: [{ userId: uid }, { actorId: uid }] }, transaction: t }),
-          Report.destroy({ where: { reporterId: uid }, transaction: t })
+          // 清理孤儿举报：该用户提交的 / 针对该用户的 / 针对其动态的 / 针对其评论的
+          Report.destroy({
+            where: {
+              [Op.or]: [
+                { reporterId: uid },
+                { targetType: 'user', targetId: uid },
+                ...(postIds.length ? [{ targetType: 'post', targetId: { [Op.in]: postIds } }] : []),
+                ...(commentIds.length ? [{ targetType: 'comment', targetId: { [Op.in]: commentIds } }] : [])
+              ]
+            },
+            transaction: t
+          })
         ]);
         await user.destroy({ transaction: t });
       });
@@ -165,12 +189,7 @@ router.get('/posts', async (req, res, next) => {
 router.post('/posts/:id/delete', async (req, res, next) => {
   try {
     await sequelize.transaction(async (t) => {
-      await Promise.all([
-        Comment.destroy({ where: { postId: req.params.id }, transaction: t }),
-        Like.destroy({ where: { postId: req.params.id }, transaction: t }),
-        Favorite.destroy({ where: { postId: req.params.id }, transaction: t })
-      ]);
-      await Post.destroy({ where: { id: req.params.id }, transaction: t });
+      await cascadeDeletePosts([Number(req.params.id)], t);
     });
     res.redirect(req.get('referer') || '/admin/posts');
   } catch (err) { next(err); }
@@ -206,7 +225,9 @@ router.get('/comments', async (req, res, next) => {
 
 router.post('/comments/:id/delete', async (req, res, next) => {
   try {
-    await Comment.destroy({ where: { id: req.params.id } });
+    await sequelize.transaction(async (t) => {
+      await cascadeDeleteComments([Number(req.params.id)], t);
+    });
     res.redirect(req.get('referer') || '/admin/comments');
   } catch (err) { next(err); }
 });
@@ -257,14 +278,55 @@ router.get('/reports', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// 处理举报：resolve（已处理）/ dismiss（驳回）
+// 处理举报：resolve（已处理）/ dismiss（驳回），resolve 可选对目标处置
+// body: { action: 'resolve'|'dismiss', disposal?: 'ban_user'|'delete_post'|'delete_comment'|'none' }
 router.post('/reports/:id/handle', async (req, res, next) => {
   try {
-    const action = req.body.action === 'dismiss' ? 'dismissed' : 'resolved';
-    await Report.update(
-      { status: action, handledAt: new Date() },
-      { where: { id: req.params.id, status: 'pending' } }
-    );
+    const report = await Report.findOne({ where: { id: req.params.id, status: 'pending' } });
+    // 已处理或不存在：幂等返回，不报错
+    if (!report) return res.redirect(req.get('referer') || '/admin/reports');
+
+    if (req.body.action === 'dismiss') {
+      await Report.update(
+        { status: 'dismissed', handledAt: new Date() },
+        { where: { id: report.id, status: 'pending' } }
+      );
+      return res.redirect(req.get('referer') || '/admin/reports');
+    }
+
+    const disposal = req.body.disposal || 'none';
+    await sequelize.transaction(async (t) => {
+      // 按目标类型执行处置（目标可能已被删除，处置 0 行不报错）
+      if (disposal === 'ban_user' && report.targetType === 'user') {
+        await User.update(
+          { status: 'banned' },
+          { where: { id: report.targetId, role: 'user' }, transaction: t }
+        );
+      } else if (disposal === 'delete_post' && report.targetType === 'post') {
+        await cascadeDeletePosts([report.targetId], t);
+      } else if (disposal === 'delete_comment' && report.targetType === 'comment') {
+        await cascadeDeleteComments([report.targetId], t);
+      }
+      // 当前举报置为已处理
+      await Report.update(
+        { status: 'resolved', handledAt: new Date() },
+        { where: { id: report.id, status: 'pending' }, transaction: t }
+      );
+      // 已处置目标时，针对同一对象的其余待处理举报一并标记为已处理
+      if (disposal !== 'none') {
+        await Report.update(
+          { status: 'resolved', handledAt: new Date() },
+          {
+            where: {
+              targetType: report.targetType,
+              targetId: report.targetId,
+              status: 'pending'
+            },
+            transaction: t
+          }
+        );
+      }
+    });
     res.redirect(req.get('referer') || '/admin/reports');
   } catch (err) { next(err); }
 });

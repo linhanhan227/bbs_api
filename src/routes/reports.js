@@ -12,14 +12,17 @@ const TARGET_MODELS = { user: User, post: Post, comment: Comment };
 router.post('/', async (req, res, next) => {
   try {
     const { targetType, targetId, reason } = req.body;
-    if (!TARGET_MODELS[targetType]) {
+    // 用 hasOwnProperty 校验，避免 targetType 传入 'constructor'/'__proto__' 等
+    // 原型链属性时绕过白名单（绕过后 .findByPk 会抛异常导致 500）
+    if (!Object.prototype.hasOwnProperty.call(TARGET_MODELS, targetType)) {
       return res.status(400).json({ code: 400, message: 'targetType 必须是 user / post / comment' });
     }
     const id = Number(targetId);
     if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({ code: 400, message: 'targetId 必须是正整数' });
     }
-    if (!reason || !reason.trim()) {
+    // 先判类型：reason 非字符串时 .trim() 会抛异常导致 500
+    if (typeof reason !== 'string' || !reason.trim()) {
       return res.status(400).json({ code: 400, message: '请填写举报原因' });
     }
     if (targetType === 'user' && id === req.user.id) {
