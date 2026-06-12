@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const { Message, User, Friendship } = require('../models');
 const { authRequired } = require('../middleware/auth');
 const { validateIdParam, parsePage, isBlockedBetween } = require('../utils/helpers');
+const { sequelize } = require('../config/database');
 
 const USER_ATTRS = ['id', 'nickname', 'avatar'];
 const RECALL_WINDOW_MS = 2 * 60 * 1000; // 撤回时限：2 分钟
@@ -81,32 +82,43 @@ router.post('/', async (req, res, next) => {
 router.get('/conversations', async (req, res, next) => {
   try {
     const me = req.user.id;
-    const all = await Message.findAll({
+    
+    // 查找所有与我相关的可见消息
+    const messages = await Message.findAll({
       where: {
         [Op.or]: [
           { senderId: me, deletedBySender: false },
           { receiverId: me, deletedByReceiver: false }
         ]
       },
+      order: [['createdAt', 'DESC']],
       include: [
         { model: User, as: 'sender', attributes: USER_ATTRS },
         { model: User, as: 'receiver', attributes: USER_ATTRS }
-      ],
-      order: [['createdAt', 'DESC']]
+      ]
     });
 
-    const map = new Map();
-    for (const m of all) {
-      const otherId = m.senderId === me ? m.receiverId : m.senderId;
-      if (!map.has(otherId)) {
-        const other = m.senderId === me ? m.receiver : m.sender;
-        map.set(otherId, { user: other, lastMessage: serializeMessage(m), unreadCount: 0 });
+    const conversationsMap = new Map();
+
+    for (const msg of messages) {
+      const otherId = msg.senderId === me ? msg.receiverId : msg.senderId;
+      
+      if (!conversationsMap.has(otherId)) {
+        const otherUser = msg.senderId === me ? msg.receiver : msg.sender;
+        conversationsMap.set(otherId, {
+          user: otherUser,
+          lastMessage: serializeMessage(msg),
+          unreadCount: 0
+        });
       }
-      if (m.receiverId === me && !m.isRead && !m.isRecalled) {
-        map.get(otherId).unreadCount++;
+      
+      if (msg.receiverId === me && !msg.isRead && !msg.isRecalled) {
+        conversationsMap.get(otherId).unreadCount++;
       }
     }
-    res.json({ code: 0, data: [...map.values()] });
+
+    const conversations = Array.from(conversationsMap.values());
+    res.json({ code: 0, data: conversations });
   } catch (err) { next(err); }
 });
 
@@ -193,26 +205,29 @@ router.delete('/conversations/:userId', validateIdParam('userId'), async (req, r
     const me = req.user.id;
     const otherId = req.params.userId;
 
-    await Promise.all([
-      Message.update(
-        { deletedBySender: true },
-        { where: { senderId: me, receiverId: otherId } }
-      ),
-      Message.update(
-        { deletedByReceiver: true },
-        { where: { senderId: otherId, receiverId: me } }
-      )
-    ]);
-    // 双方都已删除的消息物理清除
-    await Message.destroy({
-      where: {
-        deletedBySender: true,
-        deletedByReceiver: true,
-        [Op.or]: [
-          { senderId: me, receiverId: otherId },
-          { senderId: otherId, receiverId: me }
-        ]
-      }
+    await sequelize.transaction(async (t) => {
+      await Promise.all([
+        Message.update(
+          { deletedBySender: true },
+          { where: { senderId: me, receiverId: otherId }, transaction: t }
+        ),
+        Message.update(
+          { deletedByReceiver: true },
+          { where: { senderId: otherId, receiverId: me }, transaction: t }
+        )
+      ]);
+      // 双方都已删除的消息物理清除
+      await Message.destroy({
+        where: {
+          deletedBySender: true,
+          deletedByReceiver: true,
+          [Op.or]: [
+            { senderId: me, receiverId: otherId },
+            { senderId: otherId, receiverId: me }
+          ]
+        },
+        transaction: t
+      });
     });
     res.json({ code: 0, message: '会话已清空' });
   } catch (err) { next(err); }
