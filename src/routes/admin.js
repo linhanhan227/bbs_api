@@ -188,9 +188,13 @@ router.get('/posts', async (req, res, next) => {
 
 router.post('/posts/:id/delete', async (req, res, next) => {
   try {
-    await sequelize.transaction(async (t) => {
-      await cascadeDeletePosts([Number(req.params.id)], t);
-    });
+    const id = Number(req.params.id);
+    // 校验 id 为正整数：非法 id（如 NaN）不应进入事务/查询
+    if (Number.isInteger(id) && id > 0) {
+      await sequelize.transaction(async (t) => {
+        await cascadeDeletePosts([id], t);
+      });
+    }
     res.redirect(req.get('referer') || '/admin/posts');
   } catch (err) { next(err); }
 });

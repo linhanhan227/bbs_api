@@ -56,21 +56,20 @@ async function cascadeDeletePosts(postIds, t) {
   });
   const commentIds = comments.map(c => c.id);
 
-  await Promise.all([
-    Comment.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
-    Like.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
-    Favorite.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
-    Notification.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t }),
-    Report.destroy({
-      where: {
-        [Op.or]: [
-          { targetType: 'post', targetId: { [Op.in]: postIds } },
-          ...(commentIds.length ? [{ targetType: 'comment', targetId: { [Op.in]: commentIds } }] : [])
-        ]
-      },
-      transaction: t
-    })
-  ]);
+  // 同一事务绑定单条连接，逐条顺序执行（避免在同一连接上并发多条语句的反模式）
+  await Comment.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t });
+  await Like.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t });
+  await Favorite.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t });
+  await Notification.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t });
+  await Report.destroy({
+    where: {
+      [Op.or]: [
+        { targetType: 'post', targetId: { [Op.in]: postIds } },
+        ...(commentIds.length ? [{ targetType: 'comment', targetId: { [Op.in]: commentIds } }] : [])
+      ]
+    },
+    transaction: t
+  });
   await Post.destroy({ where: { id: { [Op.in]: postIds } }, transaction: t });
 }
 

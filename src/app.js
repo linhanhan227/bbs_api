@@ -29,7 +29,9 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-session-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, maxAge: 1000 * 60 * 60 * 4 } // 4 小时
+  // sameSite=lax：跨站表单 POST 不携带会话 cookie，为后台破坏性操作提供基础 CSRF 防护
+  // 生产环境（HTTPS）建议再开启 secure: true（需配合 app.set('trust proxy', 1)）
+  cookie: { httpOnly: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 4 } // 4 小时
 }));
 
 // 健康检查
