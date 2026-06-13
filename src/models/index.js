@@ -76,7 +76,8 @@ const Post = sequelize.define('Post', {
   tags: { type: DataTypes.STRING(200), allowNull: true }, // JSON 数组字符串，如 '["旅行","美食"]'
   isRepost: { type: DataTypes.BOOLEAN, defaultValue: false },          // 是否为转发动态
   originalPostId: { type: DataTypes.INTEGER, allowNull: true },        // 原动态 ID
-  repostComment: { type: DataTypes.STRING(500), allowNull: true }      // 转发时的评论
+  repostComment: { type: DataTypes.STRING(500), allowNull: true },     // 转发时的评论
+  mentions: { type: DataTypes.TEXT, allowNull: true }                  // 提及的用户 ID 数组，JSON 字符串 '[2,5,8]'
 }, { tableName: 'posts' });
 
 // ===== 评论 =====
@@ -87,7 +88,8 @@ const Comment = sequelize.define('Comment', {
   content: { type: DataTypes.STRING(500), allowNull: false },
   parentId: { type: DataTypes.INTEGER, allowNull: true },      // 父评论 ID，NULL 表示顶级评论
   rootId: { type: DataTypes.INTEGER, allowNull: true },        // 根评论 ID
-  replyToUserId: { type: DataTypes.INTEGER, allowNull: true }  // 回复的目标用户 ID
+  replyToUserId: { type: DataTypes.INTEGER, allowNull: true }, // 回复的目标用户 ID
+  mentions: { type: DataTypes.TEXT, allowNull: true }          // 提及的用户 ID 数组，JSON 字符串
 }, { tableName: 'comments' });
 
 // ===== 点赞 =====
@@ -127,7 +129,7 @@ const Notification = sequelize.define('Notification', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   userId: { type: DataTypes.INTEGER, allowNull: false },     // 接收者
   type: {
-    type: DataTypes.ENUM('friend_request', 'friend_accept', 'like', 'comment', 'follow', 'repost', 'system'),
+    type: DataTypes.ENUM('friend_request', 'friend_accept', 'like', 'comment', 'follow', 'repost', 'mention', 'system'),
     allowNull: false
   },
   actorId: { type: DataTypes.INTEGER, allowNull: true },     // 触发者

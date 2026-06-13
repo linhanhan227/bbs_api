@@ -5,7 +5,7 @@ const { authRequired } = require('../middleware/auth');
 const {
   validateIdParam, parsePage, notify, isBlockedBetween,
   cascadeDeletePosts, cascadeDeleteComments, escapeLike,
-  parseTags, serializeTags, buildCommentTree
+  parseTags, serializeTags, buildCommentTree, parseMentions, notifyMentions
 } = require('../utils/helpers');
 const { sequelize } = require('../config/database');
 
@@ -60,7 +60,7 @@ function serializePost(post, currentUserId) {
 // 发布动态
 router.post('/', async (req, res, next) => {
   try {
-    const { content, images, tags } = req.body;
+    const { content, images, tags, mentions } = req.body;
     // 先判类型：content 非字符串（如客户端误传数字/对象）时 .trim() 会抛异常导致 500
     if (typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ code: 400, message: '内容不能为空' });
@@ -90,12 +90,27 @@ router.post('/', async (req, res, next) => {
       return res.status(400).json({ code: 400, message: err.message });
     }
 
+    // 解析和校验提及
+    let mentionsJson = null;
+    try {
+      mentionsJson = await parseMentions(mentions, User);
+    } catch (err) {
+      return res.status(400).json({ code: 400, message: err.message });
+    }
+
     const post = await Post.create({
       userId: req.user.id,
       content: content.trim(),
       images: Array.isArray(images) && images.length ? JSON.stringify(images) : null,
-      tags: tagsJson
+      tags: tagsJson,
+      mentions: mentionsJson
     });
+
+    // 发送提及通知
+    if (mentionsJson) {
+      await notifyMentions(mentionsJson, 'post', post.id, req.user.id, post.id);
+    }
+
     res.status(201).json({ code: 0, message: '发布成功', data: serializePost(post, req.user.id) });
   } catch (err) { next(err); }
 });
@@ -385,7 +400,7 @@ router.delete('/:id/favorite', validateIdParam('id'), async (req, res, next) => 
 // 发表评论
 router.post('/:id/comments', validateIdParam('id'), async (req, res, next) => {
   try {
-    const { content, parentId, replyToUserId } = req.body;
+    const { content, parentId, replyToUserId, mentions } = req.body;
     // 同上：先判类型，避免非字符串 content 触发 .trim() 异常 → 500
     if (typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ code: 400, message: '评论内容不能为空' });
@@ -426,14 +441,28 @@ router.post('/:id/comments', validateIdParam('id'), async (req, res, next) => {
       }
     }
 
+    // 解析和校验提及
+    let mentionsJson = null;
+    try {
+      mentionsJson = await parseMentions(mentions, User);
+    } catch (err) {
+      return res.status(400).json({ code: 400, message: err.message });
+    }
+
     const comment = await Comment.create({
       postId: post.id,
       userId: req.user.id,
       content: content.trim(),
       parentId: parentId || null,
       rootId: rootId,
-      replyToUserId: validReplyToUserId
+      replyToUserId: validReplyToUserId,
+      mentions: mentionsJson
     });
+
+    // 发送提及通知
+    if (mentionsJson) {
+      await notifyMentions(mentionsJson, 'comment', comment.id, req.user.id, post.id);
+    }
 
     // 发送通知
     if (validReplyToUserId && validReplyToUserId !== req.user.id) {

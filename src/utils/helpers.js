@@ -107,6 +107,68 @@ function buildCommentTree(comments) {
   return roots;
 }
 
+// 解析和校验提及的用户 ID 数组
+async function parseMentions(mentions, User) {
+  if (!mentions) return null;
+  if (!Array.isArray(mentions)) {
+    throw new Error('mentions 必须是数组');
+  }
+  if (mentions.length === 0) return null;
+  if (mentions.length > 20) {
+    throw new Error('最多提及 20 个用户');
+  }
+
+  const userIds = [];
+  const seen = new Set();
+
+  for (const id of mentions) {
+    const uid = Number(id);
+    if (!Number.isInteger(uid) || uid <= 0) {
+      throw new Error('mentions 中的用户 ID 必须是正整数');
+    }
+    if (!seen.has(uid)) {
+      seen.add(uid);
+      userIds.push(uid);
+    }
+  }
+
+  if (userIds.length === 0) return null;
+
+  // 校验用户是否存在
+  const users = await User.findAll({
+    where: { id: userIds, role: 'user', status: 'active' },
+    attributes: ['id']
+  });
+
+  if (users.length !== userIds.length) {
+    throw new Error('mentions 中包含不存在或已封禁的用户');
+  }
+
+  return JSON.stringify(userIds);
+}
+
+// 批量发送提及通知
+async function notifyMentions(mentions, sourceType, sourceId, mentionerId, postId = null) {
+  if (!mentions) return;
+  try {
+    const userIds = JSON.parse(mentions);
+    if (!Array.isArray(userIds)) return;
+
+    for (const userId of userIds) {
+      if (userId === mentionerId) continue; // 不通知自己
+      await notify({
+        userId,
+        type: 'mention',
+        actorId: mentionerId,
+        postId,
+        content: `在${sourceType === 'post' ? '动态' : '评论'}中提及了你`
+      });
+    }
+  } catch (err) {
+    console.error('[notifyMentions] 发送提及通知失败:', err.message);
+  }
+}
+
 // 创建通知（自己触发自己的行为不通知；失败不影响主流程）
 async function notify({ userId, type, actorId = null, postId = null, content = null }) {
   if (actorId && actorId === userId) return;
@@ -192,5 +254,5 @@ async function cascadeDeleteComments(commentIds, t) {
 module.exports = {
   validateIdParam, parsePage, notify, isBlockedBetween,
   cascadeDeletePosts, cascadeDeleteComments, escapeLike,
-  parseTags, serializeTags, buildCommentTree
+  parseTags, serializeTags, buildCommentTree, parseMentions, notifyMentions
 };
