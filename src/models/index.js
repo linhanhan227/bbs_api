@@ -81,7 +81,10 @@ const Comment = sequelize.define('Comment', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   postId: { type: DataTypes.INTEGER, allowNull: false },
   userId: { type: DataTypes.INTEGER, allowNull: false },
-  content: { type: DataTypes.STRING(500), allowNull: false }
+  content: { type: DataTypes.STRING(500), allowNull: false },
+  parentId: { type: DataTypes.INTEGER, allowNull: true },      // 父评论 ID，NULL 表示顶级评论
+  rootId: { type: DataTypes.INTEGER, allowNull: true },        // 根评论 ID
+  replyToUserId: { type: DataTypes.INTEGER, allowNull: true }  // 回复的目标用户 ID
 }, { tableName: 'comments' });
 
 // ===== 点赞 =====
@@ -148,6 +151,9 @@ Post.belongsTo(User, { foreignKey: 'userId', as: 'author' });
 Post.hasMany(Comment, { foreignKey: 'postId', as: 'comments' });
 Comment.belongsTo(Post, { foreignKey: 'postId' });
 Comment.belongsTo(User, { foreignKey: 'userId', as: 'author' });
+Comment.belongsTo(User, { foreignKey: 'replyToUserId', as: 'replyToUser' });
+Comment.hasMany(Comment, { foreignKey: 'parentId', as: 'replies' });
+Comment.belongsTo(Comment, { foreignKey: 'parentId', as: 'parent' });
 
 Post.hasMany(Like, { foreignKey: 'postId', as: 'likes' });
 Like.belongsTo(User, { foreignKey: 'userId' });

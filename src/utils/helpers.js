@@ -77,6 +77,36 @@ function serializeTags(tagsJson) {
   }
 }
 
+// 构建评论树（将扁平评论数组转为树形结构）
+function buildCommentTree(comments) {
+  const map = new Map();
+  const roots = [];
+
+  // 第一遍：创建映射
+  for (const comment of comments) {
+    const json = comment.toJSON ? comment.toJSON() : comment;
+    json.replies = [];
+    map.set(json.id, json);
+  }
+
+  // 第二遍：构建树
+  for (const comment of map.values()) {
+    if (comment.parentId === null || comment.parentId === undefined) {
+      roots.push(comment);
+    } else {
+      const parent = map.get(comment.parentId);
+      if (parent) {
+        parent.replies.push(comment);
+      } else {
+        // 父评论不存在（可能已删除），作为顶级评论
+        roots.push(comment);
+      }
+    }
+  }
+
+  return roots;
+}
+
 // 创建通知（自己触发自己的行为不通知；失败不影响主流程）
 async function notify({ userId, type, actorId = null, postId = null, content = null }) {
   if (actorId && actorId === userId) return;
@@ -128,18 +158,39 @@ async function cascadeDeletePosts(postIds, t) {
   await Post.destroy({ where: { id: { [Op.in]: postIds } }, transaction: t });
 }
 
-// 级联删除评论:连带针对这些评论的举报，最后删评论本身。必须在事务中调用。
+// 级联删除评论:连带针对这些评论的举报和子评论，最后删评论本身。必须在事务中调用。
 async function cascadeDeleteComments(commentIds, t) {
   if (!commentIds || !commentIds.length) return;
+
+  // 查找所有子评论（递归）
+  const allCommentIds = new Set(commentIds);
+  let toProcess = [...commentIds];
+
+  while (toProcess.length > 0) {
+    const children = await Comment.findAll({
+      where: { parentId: { [Op.in]: toProcess } },
+      attributes: ['id'],
+      transaction: t
+    });
+    toProcess = [];
+    for (const child of children) {
+      if (!allCommentIds.has(child.id)) {
+        allCommentIds.add(child.id);
+        toProcess.push(child.id);
+      }
+    }
+  }
+
+  const finalIds = [...allCommentIds];
   await Report.destroy({
-    where: { targetType: 'comment', targetId: { [Op.in]: commentIds } },
+    where: { targetType: 'comment', targetId: { [Op.in]: finalIds } },
     transaction: t
   });
-  await Comment.destroy({ where: { id: { [Op.in]: commentIds } }, transaction: t });
+  await Comment.destroy({ where: { id: { [Op.in]: finalIds } }, transaction: t });
 }
 
 module.exports = {
   validateIdParam, parsePage, notify, isBlockedBetween,
   cascadeDeletePosts, cascadeDeleteComments, escapeLike,
-  parseTags, serializeTags
+  parseTags, serializeTags, buildCommentTree
 };

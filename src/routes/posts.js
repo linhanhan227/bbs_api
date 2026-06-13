@@ -5,7 +5,7 @@ const { authRequired } = require('../middleware/auth');
 const {
   validateIdParam, parsePage, notify, isBlockedBetween,
   cascadeDeletePosts, cascadeDeleteComments, escapeLike,
-  parseTags, serializeTags
+  parseTags, serializeTags, buildCommentTree
 } = require('../utils/helpers');
 const { sequelize } = require('../config/database');
 
@@ -171,7 +171,14 @@ router.get('/:id', validateIdParam('id'), async (req, res, next) => {
     const post = await Post.findByPk(req.params.id, {
       include: [
         { model: User, as: 'author', attributes: AUTHOR_ATTRS },
-        { model: Comment, as: 'comments', include: [{ model: User, as: 'author', attributes: AUTHOR_ATTRS }] },
+        {
+          model: Comment,
+          as: 'comments',
+          include: [
+            { model: User, as: 'author', attributes: AUTHOR_ATTRS },
+            { model: User, as: 'replyToUser', attributes: AUTHOR_ATTRS }
+          ]
+        },
         { model: Like, as: 'likes', attributes: ['userId'] }
       ],
       order: [[{ model: Comment, as: 'comments' }, 'createdAt', 'ASC']]
@@ -184,6 +191,8 @@ router.get('/:id', validateIdParam('id'), async (req, res, next) => {
     }
 
     const json = serializePost(post, req.user.id);
+    // 构建评论树
+    json.comments = buildCommentTree(json.comments || []);
     const fav = await Favorite.findOne({ where: { postId: post.id, userId: req.user.id } });
     json.favorited = !!fav;
     res.json({ code: 0, data: json });
@@ -256,7 +265,7 @@ router.delete('/:id/favorite', validateIdParam('id'), async (req, res, next) => 
 // 发表评论
 router.post('/:id/comments', validateIdParam('id'), async (req, res, next) => {
   try {
-    const { content } = req.body;
+    const { content, parentId, replyToUserId } = req.body;
     // 同上：先判类型，避免非字符串 content 触发 .trim() 异常 → 500
     if (typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ code: 400, message: '评论内容不能为空' });
@@ -267,33 +276,126 @@ router.post('/:id/comments', validateIdParam('id'), async (req, res, next) => {
       return res.status(403).json({ code: 403, message: '无法评论该动态' });
     }
 
+    // 校验 parentId（如果是回复评论）
+    let rootId = null;
+    let validReplyToUserId = null;
+    if (parentId !== undefined && parentId !== null) {
+      const parentIdNum = Number(parentId);
+      if (!Number.isInteger(parentIdNum) || parentIdNum <= 0) {
+        return res.status(400).json({ code: 400, message: 'parentId 必须是正整数' });
+      }
+      const parentComment = await Comment.findOne({
+        where: { id: parentIdNum, postId: post.id }
+      });
+      if (!parentComment) {
+        return res.status(404).json({ code: 404, message: '父评论不存在或不属于该动态' });
+      }
+      // 计算 rootId：如果父评论本身就是顶级评论，rootId 就是它；否则继承父评论的 rootId
+      rootId = parentComment.rootId || parentComment.id;
+
+      // 校验 replyToUserId
+      if (replyToUserId !== undefined && replyToUserId !== null) {
+        const targetUserId = Number(replyToUserId);
+        if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+          return res.status(400).json({ code: 400, message: 'replyToUserId 必须是正整数' });
+        }
+        validReplyToUserId = targetUserId;
+      } else {
+        // 默认回复父评论作者
+        validReplyToUserId = parentComment.userId;
+      }
+    }
+
     const comment = await Comment.create({
       postId: post.id,
       userId: req.user.id,
-      content: content.trim()
+      content: content.trim(),
+      parentId: parentId || null,
+      rootId: rootId,
+      replyToUserId: validReplyToUserId
     });
-    await notify({
-      userId: post.userId, type: 'comment', actorId: req.user.id,
-      postId: post.id, content: comment.content.slice(0, 100)
-    });
+
+    // 发送通知
+    if (validReplyToUserId && validReplyToUserId !== req.user.id) {
+      // 回复评论：通知被回复者
+      await notify({
+        userId: validReplyToUserId,
+        type: 'comment',
+        actorId: req.user.id,
+        postId: post.id,
+        content: comment.content.slice(0, 100)
+      });
+    }
+    // 如果不是回复评论，或动态作者与被回复者不同，也通知动态作者
+    if (post.userId !== req.user.id && (!validReplyToUserId || post.userId !== validReplyToUserId)) {
+      await notify({
+        userId: post.userId,
+        type: 'comment',
+        actorId: req.user.id,
+        postId: post.id,
+        content: comment.content.slice(0, 100)
+      });
+    }
+
     res.status(201).json({ code: 0, message: '评论成功', data: comment });
   } catch (err) { next(err); }
 });
 
-// 评论列表（分页）
+// 评论列表（分页，支持扁平或树形）
+// GET /api/posts/:id/comments?flat=0&page=1&pageSize=20
 router.get('/:id/comments', validateIdParam('id'), async (req, res, next) => {
   try {
     const post = await Post.findByPk(req.params.id);
     if (!post) return res.status(404).json({ code: 404, message: '动态不存在' });
 
+    const flat = req.query.flat === '1' || req.query.flat === 'true';
     const { page, pageSize, offset, limit } = parsePage(req, 20, 100);
-    const { rows, count } = await Comment.findAndCountAll({
-      where: { postId: post.id },
-      include: [{ model: User, as: 'author', attributes: AUTHOR_ATTRS }],
-      order: [['createdAt', 'ASC']],
-      offset, limit
-    });
-    res.json({ code: 0, data: { list: rows, total: count, page, pageSize } });
+
+    if (flat) {
+      // 扁平模式：按时间顺序返回所有评论
+      const { rows, count } = await Comment.findAndCountAll({
+        where: { postId: post.id },
+        include: [
+          { model: User, as: 'author', attributes: AUTHOR_ATTRS },
+          { model: User, as: 'replyToUser', attributes: AUTHOR_ATTRS }
+        ],
+        order: [['createdAt', 'ASC']],
+        offset, limit
+      });
+      res.json({ code: 0, data: { list: rows, total: count, page, pageSize } });
+    } else {
+      // 树形模式：仅对顶级评论分页，子评论全量加载
+      const { rows: topComments, count } = await Comment.findAndCountAll({
+        where: { postId: post.id, parentId: null },
+        attributes: ['id'],
+        order: [['createdAt', 'ASC']],
+        offset, limit
+      });
+
+      if (topComments.length === 0) {
+        return res.json({ code: 0, data: { list: [], total: count, page, pageSize } });
+      }
+
+      const topIds = topComments.map(c => c.id);
+
+      // 加载这些顶级评论及其所有子孙评论
+      const allComments = await Comment.findAll({
+        where: {
+          [Op.or]: [
+            { id: { [Op.in]: topIds } },
+            { rootId: { [Op.in]: topIds } }
+          ]
+        },
+        include: [
+          { model: User, as: 'author', attributes: AUTHOR_ATTRS },
+          { model: User, as: 'replyToUser', attributes: AUTHOR_ATTRS }
+        ],
+        order: [['createdAt', 'ASC']]
+      });
+
+      const tree = buildCommentTree(allComments);
+      res.json({ code: 0, data: { list: tree, total: count, page, pageSize } });
+    }
   } catch (err) { next(err); }
 });
 
