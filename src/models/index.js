@@ -72,7 +72,12 @@ const Post = sequelize.define('Post', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   userId: { type: DataTypes.INTEGER, allowNull: false },
   content: { type: DataTypes.TEXT, allowNull: false },
-  images: { type: DataTypes.TEXT, allowNull: true } // JSON 数组字符串
+  images: { type: DataTypes.TEXT, allowNull: true }, // JSON 数组字符串
+  tags: { type: DataTypes.STRING(200), allowNull: true }, // JSON 数组字符串，如 '["旅行","美食"]'
+  isRepost: { type: DataTypes.BOOLEAN, defaultValue: false },          // 是否为转发动态
+  originalPostId: { type: DataTypes.INTEGER, allowNull: true },        // 原动态 ID
+  repostComment: { type: DataTypes.STRING(500), allowNull: true },     // 转发时的评论
+  mentions: { type: DataTypes.TEXT, allowNull: true }                  // 提及的用户 ID 数组，JSON 字符串 '[2,5,8]'
 }, { tableName: 'posts' });
 
 // ===== 评论 =====
@@ -80,7 +85,11 @@ const Comment = sequelize.define('Comment', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   postId: { type: DataTypes.INTEGER, allowNull: false },
   userId: { type: DataTypes.INTEGER, allowNull: false },
-  content: { type: DataTypes.STRING(500), allowNull: false }
+  content: { type: DataTypes.STRING(500), allowNull: false },
+  parentId: { type: DataTypes.INTEGER, allowNull: true },      // 父评论 ID，NULL 表示顶级评论
+  rootId: { type: DataTypes.INTEGER, allowNull: true },        // 根评论 ID
+  replyToUserId: { type: DataTypes.INTEGER, allowNull: true }, // 回复的目标用户 ID
+  mentions: { type: DataTypes.TEXT, allowNull: true }          // 提及的用户 ID 数组，JSON 字符串
 }, { tableName: 'comments' });
 
 // ===== 点赞 =====
@@ -120,7 +129,7 @@ const Notification = sequelize.define('Notification', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   userId: { type: DataTypes.INTEGER, allowNull: false },     // 接收者
   type: {
-    type: DataTypes.ENUM('friend_request', 'friend_accept', 'like', 'comment', 'follow', 'system'),
+    type: DataTypes.ENUM('friend_request', 'friend_accept', 'like', 'comment', 'follow', 'repost', 'mention', 'system'),
     allowNull: false
   },
   actorId: { type: DataTypes.INTEGER, allowNull: true },     // 触发者
@@ -143,10 +152,15 @@ const Report = sequelize.define('Report', {
 // ===== 关联 =====
 User.hasMany(Post, { foreignKey: 'userId', as: 'posts' });
 Post.belongsTo(User, { foreignKey: 'userId', as: 'author' });
+Post.belongsTo(Post, { foreignKey: 'originalPostId', as: 'originalPost' });
+Post.hasMany(Post, { foreignKey: 'originalPostId', as: 'reposts' });
 
 Post.hasMany(Comment, { foreignKey: 'postId', as: 'comments' });
 Comment.belongsTo(Post, { foreignKey: 'postId' });
 Comment.belongsTo(User, { foreignKey: 'userId', as: 'author' });
+Comment.belongsTo(User, { foreignKey: 'replyToUserId', as: 'replyToUser' });
+Comment.hasMany(Comment, { foreignKey: 'parentId', as: 'replies' });
+Comment.belongsTo(Comment, { foreignKey: 'parentId', as: 'parent' });
 
 Post.hasMany(Like, { foreignKey: 'postId', as: 'likes' });
 Like.belongsTo(User, { foreignKey: 'userId' });

@@ -33,6 +33,142 @@ function escapeLike(str) {
   return str.replace(/[%_\\]/g, '\\$&');
 }
 
+// 解析和校验标签数组
+function parseTags(tags) {
+  if (!tags) return null;
+  if (!Array.isArray(tags)) {
+    throw new Error('标签必须是数组');
+  }
+  if (tags.length === 0) return null;
+  if (tags.length > 5) {
+    throw new Error('最多添加 5 个标签');
+  }
+
+  const cleaned = [];
+  const seen = new Set();
+
+  for (const tag of tags) {
+    if (typeof tag !== 'string') {
+      throw new Error('标签必须是字符串');
+    }
+    const trimmed = tag.trim();
+    if (trimmed.length === 0) continue;
+    if (trimmed.length > 20) {
+      throw new Error('标签最长 20 字符');
+    }
+    // 去重
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed);
+      cleaned.push(trimmed);
+    }
+  }
+
+  return cleaned.length > 0 ? JSON.stringify(cleaned) : null;
+}
+
+// 序列化标签（JSON 字符串转数组）
+function serializeTags(tagsJson) {
+  if (!tagsJson) return [];
+  try {
+    const arr = JSON.parse(tagsJson);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+// 构建评论树（将扁平评论数组转为树形结构）
+function buildCommentTree(comments) {
+  const map = new Map();
+  const roots = [];
+
+  // 第一遍：创建映射
+  for (const comment of comments) {
+    const json = comment.toJSON ? comment.toJSON() : comment;
+    json.replies = [];
+    map.set(json.id, json);
+  }
+
+  // 第二遍：构建树
+  for (const comment of map.values()) {
+    if (comment.parentId === null || comment.parentId === undefined) {
+      roots.push(comment);
+    } else {
+      const parent = map.get(comment.parentId);
+      if (parent) {
+        parent.replies.push(comment);
+      } else {
+        // 父评论不存在（可能已删除），作为顶级评论
+        roots.push(comment);
+      }
+    }
+  }
+
+  return roots;
+}
+
+// 解析和校验提及的用户 ID 数组
+async function parseMentions(mentions, User) {
+  if (!mentions) return null;
+  if (!Array.isArray(mentions)) {
+    throw new Error('mentions 必须是数组');
+  }
+  if (mentions.length === 0) return null;
+  if (mentions.length > 20) {
+    throw new Error('最多提及 20 个用户');
+  }
+
+  const userIds = [];
+  const seen = new Set();
+
+  for (const id of mentions) {
+    const uid = Number(id);
+    if (!Number.isInteger(uid) || uid <= 0) {
+      throw new Error('mentions 中的用户 ID 必须是正整数');
+    }
+    if (!seen.has(uid)) {
+      seen.add(uid);
+      userIds.push(uid);
+    }
+  }
+
+  if (userIds.length === 0) return null;
+
+  // 校验用户是否存在
+  const users = await User.findAll({
+    where: { id: userIds, role: 'user', status: 'active' },
+    attributes: ['id']
+  });
+
+  if (users.length !== userIds.length) {
+    throw new Error('mentions 中包含不存在或已封禁的用户');
+  }
+
+  return JSON.stringify(userIds);
+}
+
+// 批量发送提及通知
+async function notifyMentions(mentions, sourceType, sourceId, mentionerId, postId = null) {
+  if (!mentions) return;
+  try {
+    const userIds = JSON.parse(mentions);
+    if (!Array.isArray(userIds)) return;
+
+    for (const userId of userIds) {
+      if (userId === mentionerId) continue; // 不通知自己
+      await notify({
+        userId,
+        type: 'mention',
+        actorId: mentionerId,
+        postId,
+        content: `在${sourceType === 'post' ? '动态' : '评论'}中提及了你`
+      });
+    }
+  } catch (err) {
+    console.error('[notifyMentions] 发送提及通知失败:', err.message);
+  }
+}
+
 // 创建通知（自己触发自己的行为不通知；失败不影响主流程）
 async function notify({ userId, type, actorId = null, postId = null, content = null }) {
   if (actorId && actorId === userId) return;
@@ -84,17 +220,39 @@ async function cascadeDeletePosts(postIds, t) {
   await Post.destroy({ where: { id: { [Op.in]: postIds } }, transaction: t });
 }
 
-// 级联删除评论:连带针对这些评论的举报，最后删评论本身。必须在事务中调用。
+// 级联删除评论:连带针对这些评论的举报和子评论，最后删评论本身。必须在事务中调用。
 async function cascadeDeleteComments(commentIds, t) {
   if (!commentIds || !commentIds.length) return;
+
+  // 查找所有子评论（递归）
+  const allCommentIds = new Set(commentIds);
+  let toProcess = [...commentIds];
+
+  while (toProcess.length > 0) {
+    const children = await Comment.findAll({
+      where: { parentId: { [Op.in]: toProcess } },
+      attributes: ['id'],
+      transaction: t
+    });
+    toProcess = [];
+    for (const child of children) {
+      if (!allCommentIds.has(child.id)) {
+        allCommentIds.add(child.id);
+        toProcess.push(child.id);
+      }
+    }
+  }
+
+  const finalIds = [...allCommentIds];
   await Report.destroy({
-    where: { targetType: 'comment', targetId: { [Op.in]: commentIds } },
+    where: { targetType: 'comment', targetId: { [Op.in]: finalIds } },
     transaction: t
   });
-  await Comment.destroy({ where: { id: { [Op.in]: commentIds } }, transaction: t });
+  await Comment.destroy({ where: { id: { [Op.in]: finalIds } }, transaction: t });
 }
 
 module.exports = {
   validateIdParam, parsePage, notify, isBlockedBetween,
-  cascadeDeletePosts, cascadeDeleteComments, escapeLike
+  cascadeDeletePosts, cascadeDeleteComments, escapeLike,
+  parseTags, serializeTags, buildCommentTree, parseMentions, notifyMentions
 };
