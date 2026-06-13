@@ -27,6 +27,28 @@ function serializePost(post, currentUserId) {
   const json = post.toJSON();
   json.images = parseImages(json.images);
   json.tags = serializeTags(json.tags);
+
+  // 处理转发信息
+  if (json.isRepost && json.originalPost) {
+    const originalPost = json.originalPost;
+    json.originalPost = {
+      id: originalPost.id,
+      content: originalPost.content,
+      images: parseImages(originalPost.images),
+      tags: serializeTags(originalPost.tags),
+      author: originalPost.author,
+      createdAt: originalPost.createdAt,
+      isDeleted: false
+    };
+  } else if (json.isRepost && !json.originalPost && json.originalPostId) {
+    // 原动态已被删除
+    json.originalPost = {
+      id: json.originalPostId,
+      isDeleted: true,
+      content: '原动态已被删除'
+    };
+  }
+
   // likes 可能未被 include（如刚发布的动态）；统一输出 likeCount/liked，保证响应结构一致
   const likes = Array.isArray(json.likes) ? json.likes : [];
   json.likeCount = likes.length;
@@ -151,7 +173,13 @@ router.get('/', async (req, res, next) => {
       where,
       include: [
         { model: User, as: 'author', attributes: AUTHOR_ATTRS },
-        { model: Like, as: 'likes', attributes: ['userId'] }
+        { model: Like, as: 'likes', attributes: ['userId'] },
+        {
+          model: Post,
+          as: 'originalPost',
+          required: false,
+          include: [{ model: User, as: 'author', attributes: AUTHOR_ATTRS }]
+        }
       ],
       order: [['createdAt', 'DESC']],
       offset, limit,
@@ -179,7 +207,13 @@ router.get('/:id', validateIdParam('id'), async (req, res, next) => {
             { model: User, as: 'replyToUser', attributes: AUTHOR_ATTRS }
           ]
         },
-        { model: Like, as: 'likes', attributes: ['userId'] }
+        { model: Like, as: 'likes', attributes: ['userId'] },
+        {
+          model: Post,
+          as: 'originalPost',
+          required: false,
+          include: [{ model: User, as: 'author', attributes: AUTHOR_ATTRS }]
+        }
       ],
       order: [[{ model: Comment, as: 'comments' }, 'createdAt', 'ASC']]
     });
@@ -196,6 +230,92 @@ router.get('/:id', validateIdParam('id'), async (req, res, next) => {
     const fav = await Favorite.findOne({ where: { postId: post.id, userId: req.user.id } });
     json.favorited = !!fav;
     res.json({ code: 0, data: json });
+  } catch (err) { next(err); }
+});
+
+// 转发动态
+router.post('/:id/repost', validateIdParam('id'), async (req, res, next) => {
+  try {
+    const { comment } = req.body;
+
+    // 校验转发评论
+    if (comment !== undefined && comment !== null) {
+      if (typeof comment !== 'string') {
+        return res.status(400).json({ code: 400, message: '转发评论必须是字符串' });
+      }
+      if (comment.trim().length > 500) {
+        return res.status(400).json({ code: 400, message: '转发评论最长 500 字符' });
+      }
+    }
+
+    const originalPost = await Post.findByPk(req.params.id, {
+      include: [{ model: User, as: 'author', attributes: AUTHOR_ATTRS }]
+    });
+    if (!originalPost) {
+      return res.status(404).json({ code: 404, message: '原动态不存在' });
+    }
+
+    // 检查拉黑关系
+    if (await isBlockedBetween(req.user.id, originalPost.userId)) {
+      return res.status(403).json({ code: 403, message: '无法转发该动态' });
+    }
+
+    // 不能转发已经是转发的动态（避免多层转发）
+    if (originalPost.isRepost) {
+      return res.status(400).json({ code: 400, message: '不能转发转发动态，请转发原动态' });
+    }
+
+    // 检查是否已转发过（可选限制）
+    const existingRepost = await Post.findOne({
+      where: {
+        userId: req.user.id,
+        originalPostId: originalPost.id,
+        isRepost: true
+      }
+    });
+    if (existingRepost) {
+      return res.status(409).json({ code: 409, message: '你已转发过该动态' });
+    }
+
+    // 创建转发动态
+    const repost = await Post.create({
+      userId: req.user.id,
+      content: originalPost.content, // 继承原动态内容
+      images: originalPost.images,   // 继承原动态图片
+      tags: originalPost.tags,       // 继承原动态标签
+      isRepost: true,
+      originalPostId: originalPost.id,
+      repostComment: comment ? comment.trim() : null
+    });
+
+    // 通知原作者
+    if (originalPost.userId !== req.user.id) {
+      await notify({
+        userId: originalPost.userId,
+        type: 'repost',
+        actorId: req.user.id,
+        postId: originalPost.id,
+        content: comment ? comment.trim().slice(0, 100) : null
+      });
+    }
+
+    // 加载完整信息返回
+    const fullRepost = await Post.findByPk(repost.id, {
+      include: [
+        { model: User, as: 'author', attributes: AUTHOR_ATTRS },
+        {
+          model: Post,
+          as: 'originalPost',
+          include: [{ model: User, as: 'author', attributes: AUTHOR_ATTRS }]
+        }
+      ]
+    });
+
+    res.status(201).json({
+      code: 0,
+      message: '转发成功',
+      data: serializePost(fullRepost, req.user.id)
+    });
   } catch (err) { next(err); }
 });
 

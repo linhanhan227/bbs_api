@@ -73,7 +73,10 @@ const Post = sequelize.define('Post', {
   userId: { type: DataTypes.INTEGER, allowNull: false },
   content: { type: DataTypes.TEXT, allowNull: false },
   images: { type: DataTypes.TEXT, allowNull: true }, // JSON 数组字符串
-  tags: { type: DataTypes.STRING(200), allowNull: true } // JSON 数组字符串，如 '["旅行","美食"]'
+  tags: { type: DataTypes.STRING(200), allowNull: true }, // JSON 数组字符串，如 '["旅行","美食"]'
+  isRepost: { type: DataTypes.BOOLEAN, defaultValue: false },          // 是否为转发动态
+  originalPostId: { type: DataTypes.INTEGER, allowNull: true },        // 原动态 ID
+  repostComment: { type: DataTypes.STRING(500), allowNull: true }      // 转发时的评论
 }, { tableName: 'posts' });
 
 // ===== 评论 =====
@@ -124,7 +127,7 @@ const Notification = sequelize.define('Notification', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   userId: { type: DataTypes.INTEGER, allowNull: false },     // 接收者
   type: {
-    type: DataTypes.ENUM('friend_request', 'friend_accept', 'like', 'comment', 'follow', 'system'),
+    type: DataTypes.ENUM('friend_request', 'friend_accept', 'like', 'comment', 'follow', 'repost', 'system'),
     allowNull: false
   },
   actorId: { type: DataTypes.INTEGER, allowNull: true },     // 触发者
@@ -147,6 +150,8 @@ const Report = sequelize.define('Report', {
 // ===== 关联 =====
 User.hasMany(Post, { foreignKey: 'userId', as: 'posts' });
 Post.belongsTo(User, { foreignKey: 'userId', as: 'author' });
+Post.belongsTo(Post, { foreignKey: 'originalPostId', as: 'originalPost' });
+Post.hasMany(Post, { foreignKey: 'originalPostId', as: 'reposts' });
 
 Post.hasMany(Comment, { foreignKey: 'postId', as: 'comments' });
 Comment.belongsTo(Post, { foreignKey: 'postId' });
