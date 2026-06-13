@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { Op } = require('sequelize');
 const { User, Follow, Block, Friendship, Post } = require('../models');
 const { authRequired } = require('../middleware/auth');
-const { validateIdParam, parsePage } = require('../utils/helpers');
+const { validateIdParam, parsePage, escapeLike } = require('../utils/helpers');
 
 const PUBLIC_ATTRS = ['id', 'username', 'nickname', 'gender', 'age', 'city', 'bio', 'avatar', 'createdAt'];
 
@@ -26,7 +26,7 @@ router.get('/', async (req, res, next) => {
     }
 
     const where = { status: 'active', role: 'user', id: { [Op.notIn]: [...excludeIds] } };
-    if (keyword) where.nickname = { [Op.like]: `%${keyword}%` };
+    if (keyword) where.nickname = { [Op.like]: `%${escapeLike(keyword)}%` };
     if (gender) {
       if (!['male', 'female', 'secret'].includes(gender)) {
         return res.status(400).json({ code: 400, message: 'gender 必须是 male / female / secret' });
@@ -68,11 +68,33 @@ router.put('/me', async (req, res, next) => {
       req.user.age = req.body.age === null ? null : age;
     }
     for (const key of ['city', 'bio', 'avatar']) {
-      if (req.body[key] !== undefined) req.user[key] = req.body[key];
+      if (req.body[key] !== undefined) {
+        if (key === 'city' && req.body[key] !== null) {
+          const city = String(req.body[key]).trim();
+          if (city.length > 64) {
+            return res.status(400).json({ code: 400, message: '城市名最长 64 字符' });
+          }
+          req.user.city = city || null;
+        } else if (key === 'bio' && req.body[key] !== null) {
+          const bio = String(req.body[key]).trim();
+          if (bio.length > 500) {
+            return res.status(400).json({ code: 400, message: '个人简介最长 500 字符' });
+          }
+          req.user.bio = bio || null;
+        } else if (key === 'avatar' && req.body[key] !== null) {
+          const avatar = String(req.body[key]).trim();
+          if (avatar.length > 255) {
+            return res.status(400).json({ code: 400, message: '头像 URL 最长 255 字符' });
+          }
+          req.user.avatar = avatar || null;
+        } else {
+          req.user[key] = req.body[key];
+        }
+      }
     }
     if (req.body.password !== undefined) {
-      if (typeof req.body.password !== 'string' || req.body.password.length < 6) {
-        return res.status(400).json({ code: 400, message: '密码至少 6 位' });
+      if (typeof req.body.password !== 'string' || req.body.password.length < 8) {
+        return res.status(400).json({ code: 400, message: '密码至少 8 位' });
       }
       req.user.password = req.body.password;
     }

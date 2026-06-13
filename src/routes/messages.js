@@ -51,7 +51,7 @@ router.post('/', async (req, res, next) => {
     if (!Number.isInteger(targetId) || targetId <= 0 || targetId === req.user.id) {
       return res.status(400).json({ code: 400, message: '无效的接收者' });
     }
-    if (!content || !content.trim()) {
+    if (typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ code: 400, message: '消息内容不能为空' });
     }
     if (content.trim().length > 1000) {

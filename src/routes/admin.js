@@ -6,12 +6,12 @@ const {
 } = require('../models');
 const { adminRequired } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
-const { cascadeDeletePosts, cascadeDeleteComments } = require('../utils/helpers');
+const { cascadeDeletePosts, cascadeDeleteComments, escapeLike } = require('../utils/helpers');
 
 // ===== 登录 / 登出 =====
 router.get('/login', (req, res) => {
   if (req.session.admin) return res.redirect('/admin');
-  res.render('admin/login', { error: null });
+  res.render('admin/login', { error: null, csrfToken: req.csrfToken() });
 });
 
 router.post('/login', async (req, res, next) => {
@@ -19,7 +19,7 @@ router.post('/login', async (req, res, next) => {
     const { username, password } = req.body;
     const user = await User.findOne({ where: { username: username || '', role: 'admin' } });
     if (!user || !(await user.checkPassword(password || ''))) {
-      return res.render('admin/login', { error: '用户名或密码错误' });
+      return res.render('admin/login', { error: '用户名或密码错误', csrfToken: req.csrfToken() });
     }
     req.session.admin = { id: user.id, username: user.username, nickname: user.nickname };
     res.redirect('/admin');
@@ -54,6 +54,7 @@ router.get('/', async (req, res, next) => {
     res.render('admin/dashboard', {
       admin: req.session.admin,
       active: 'dashboard',
+      csrfToken: req.csrfToken(),
       stats: {
         userCount, postCount, commentCount, friendshipCount, messageCount,
         todayUsers, todayPosts, bannedCount, pendingReports
@@ -71,8 +72,8 @@ router.get('/users', async (req, res, next) => {
     const where = { role: 'user' };
     if (keyword) {
       where[Op.or] = [
-        { username: { [Op.like]: `%${keyword}%` } },
-        { nickname: { [Op.like]: `%${keyword}%` } }
+        { username: { [Op.like]: `%${escapeLike(keyword)}%` } },
+        { nickname: { [Op.like]: `%${escapeLike(keyword)}%` } }
       ];
     }
     const { rows, count } = await User.findAndCountAll({
@@ -84,6 +85,7 @@ router.get('/users', async (req, res, next) => {
     res.render('admin/users', {
       admin: req.session.admin,
       active: 'users',
+      csrfToken: req.csrfToken(),
       users: rows,
       keyword,
       page,
@@ -178,6 +180,7 @@ router.get('/posts', async (req, res, next) => {
     res.render('admin/posts', {
       admin: req.session.admin,
       active: 'posts',
+      csrfToken: req.csrfToken(),
       posts: rows,
       page,
       totalPages: Math.max(1, Math.ceil(count / pageSize)),
@@ -190,11 +193,12 @@ router.post('/posts/:id/delete', async (req, res, next) => {
   try {
     const id = Number(req.params.id);
     // 校验 id 为正整数：非法 id（如 NaN）不应进入事务/查询
-    if (Number.isInteger(id) && id > 0) {
-      await sequelize.transaction(async (t) => {
-        await cascadeDeletePosts([id], t);
-      });
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).send('无效的动态 ID');
     }
+    await sequelize.transaction(async (t) => {
+      await cascadeDeletePosts([id], t);
+    });
     res.redirect(req.get('referer') || '/admin/posts');
   } catch (err) { next(err); }
 });
@@ -206,7 +210,7 @@ router.get('/comments', async (req, res, next) => {
     const pageSize = 20;
     const keyword = (req.query.keyword || '').trim();
     const where = {};
-    if (keyword) where.content = { [Op.like]: `%${keyword}%` };
+    if (keyword) where.content = { [Op.like]: `%${escapeLike(keyword)}%` };
 
     const { rows, count } = await Comment.findAndCountAll({
       where,
@@ -218,6 +222,7 @@ router.get('/comments', async (req, res, next) => {
     res.render('admin/comments', {
       admin: req.session.admin,
       active: 'comments',
+      csrfToken: req.csrfToken(),
       comments: rows,
       keyword,
       page,
@@ -229,8 +234,12 @@ router.get('/comments', async (req, res, next) => {
 
 router.post('/comments/:id/delete', async (req, res, next) => {
   try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).send('无效的评论 ID');
+    }
     await sequelize.transaction(async (t) => {
-      await cascadeDeleteComments([Number(req.params.id)], t);
+      await cascadeDeleteComments([id], t);
     });
     res.redirect(req.get('referer') || '/admin/comments');
   } catch (err) { next(err); }
@@ -273,6 +282,7 @@ router.get('/reports', async (req, res, next) => {
     res.render('admin/reports', {
       admin: req.session.admin,
       active: 'reports',
+      csrfToken: req.csrfToken(),
       reports,
       status,
       page,

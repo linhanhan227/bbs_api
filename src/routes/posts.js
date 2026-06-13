@@ -4,7 +4,7 @@ const { Post, Comment, Like, Favorite, User, Block } = require('../models');
 const { authRequired } = require('../middleware/auth');
 const {
   validateIdParam, parsePage, notify, isBlockedBetween,
-  cascadeDeletePosts, cascadeDeleteComments
+  cascadeDeletePosts, cascadeDeleteComments, escapeLike
 } = require('../utils/helpers');
 const { sequelize } = require('../config/database');
 
@@ -41,8 +41,21 @@ router.post('/', async (req, res, next) => {
     if (typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ code: 400, message: '内容不能为空' });
     }
-    if (images !== undefined && !Array.isArray(images)) {
-      return res.status(400).json({ code: 400, message: 'images 必须是数组' });
+    if (content.trim().length > 5000) {
+      return res.status(400).json({ code: 400, message: '动态内容最长 5000 字符' });
+    }
+    if (images !== undefined) {
+      if (!Array.isArray(images)) {
+        return res.status(400).json({ code: 400, message: 'images 必须是数组' });
+      }
+      if (images.length > 9) {
+        return res.status(400).json({ code: 400, message: '最多上传 9 张图片' });
+      }
+      for (const img of images) {
+        if (typeof img !== 'string' || img.length > 500) {
+          return res.status(400).json({ code: 400, message: '图片 URL 必须是字符串且不超过 500 字符' });
+        }
+      }
     }
     const post = await Post.create({
       userId: req.user.id,
@@ -111,7 +124,7 @@ router.get('/', async (req, res, next) => {
       where.userId = { [Op.notIn]: [...excludeIds] };
     }
     if (req.query.keyword) {
-      where.content = { [Op.like]: `%${req.query.keyword}%` };
+      where.content = { [Op.like]: `%${escapeLike(req.query.keyword)}%` };
     }
 
     const { rows, count } = await Post.findAndCountAll({

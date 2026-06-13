@@ -15,11 +15,22 @@ function validateIdParam(...names) {
   };
 }
 
-// 解析分页参数
+// 解析分页参数（健壮性：处理 NaN）
 function parsePage(req, defaultSize = 20, maxSize = 50) {
-  const page = Math.max(1, parseInt(req.query.page) || 1);
-  const pageSize = Math.min(maxSize, Math.max(1, parseInt(req.query.pageSize) || defaultSize));
+  const pageRaw = parseInt(req.query.page);
+  const pageSizeRaw = parseInt(req.query.pageSize);
+  const page = Number.isInteger(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+  const pageSize = Number.isInteger(pageSizeRaw) && pageSizeRaw > 0
+    ? Math.min(maxSize, pageSizeRaw)
+    : defaultSize;
   return { page, pageSize, offset: (page - 1) * pageSize, limit: pageSize };
+}
+
+// 转义 SQL LIKE 通配符，防止注入
+function escapeLike(str) {
+  if (typeof str !== 'string') return '';
+  // 转义 % _ \ 三个特殊字符
+  return str.replace(/[%_\\]/g, '\\$&');
 }
 
 // 创建通知（自己触发自己的行为不通知；失败不影响主流程）
@@ -85,5 +96,5 @@ async function cascadeDeleteComments(commentIds, t) {
 
 module.exports = {
   validateIdParam, parsePage, notify, isBlockedBetween,
-  cascadeDeletePosts, cascadeDeleteComments
+  cascadeDeletePosts, cascadeDeleteComments, escapeLike
 };

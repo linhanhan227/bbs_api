@@ -16,6 +16,14 @@ router.post('/requests', async (req, res, next) => {
     if (!Number.isInteger(targetId) || targetId <= 0 || targetId === req.user.id) {
       return res.status(400).json({ code: 400, message: '无效的目标用户' });
     }
+    if (message !== undefined && message !== null) {
+      if (typeof message !== 'string') {
+        return res.status(400).json({ code: 400, message: '附加消息必须是字符串' });
+      }
+      if (message.length > 200) {
+        return res.status(400).json({ code: 400, message: '附加消息最长 200 字符' });
+      }
+    }
     const target = await User.findOne({ where: { id: targetId, role: 'user' } });
     if (!target) return res.status(404).json({ code: 404, message: '用户不存在' });
     if (target.status === 'banned') {

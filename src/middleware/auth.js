@@ -1,5 +1,11 @@
 const jwt = require('jsonwebtoken');
 const { User } = require('../models');
+const { env } = require('../config/database');
+
+// 生产环境必须配置 JWT_SECRET
+if (env === 'production' && !process.env.JWT_SECRET) {
+  throw new Error('生产环境必须配置 JWT_SECRET 环境变量');
+}
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 

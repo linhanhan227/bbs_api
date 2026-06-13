@@ -9,8 +9,14 @@ router.post('/register', async (req, res, next) => {
     if (!username || !password) {
       return res.status(400).json({ code: 400, message: '用户名和密码不能为空' });
     }
-    if (password.length < 6) {
-      return res.status(400).json({ code: 400, message: '密码至少 6 位' });
+    if (username.length < 3 || username.length > 32) {
+      return res.status(400).json({ code: 400, message: '用户名长度 3-32 字符' });
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      return res.status(400).json({ code: 400, message: '用户名只能包含字母、数字和下划线' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ code: 400, message: '密码至少 8 位' });
     }
     const exists = await User.findOne({ where: { username } });
     if (exists) return res.status(409).json({ code: 409, message: '用户名已存在' });

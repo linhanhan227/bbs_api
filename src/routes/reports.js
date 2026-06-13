@@ -25,6 +25,9 @@ router.post('/', async (req, res, next) => {
     if (typeof reason !== 'string' || !reason.trim()) {
       return res.status(400).json({ code: 400, message: '请填写举报原因' });
     }
+    if (reason.trim().length > 500) {
+      return res.status(400).json({ code: 400, message: '举报原因最长 500 字符' });
+    }
     if (targetType === 'user' && id === req.user.id) {
       return res.status(400).json({ code: 400, message: '不能举报自己' });
     }

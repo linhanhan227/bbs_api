@@ -2,6 +2,7 @@ require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
+const csrf = require('csurf');
 
 const { env } = require('./config/database');
 const authRoutes = require('./routes/auth');
@@ -21,6 +22,11 @@ const app = express();
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, '../views'));
 
+// 生产环境必须配置 SESSION_SECRET
+if (env === 'production' && !process.env.SESSION_SECRET) {
+  throw new Error('生产环境必须配置 SESSION_SECRET 环境变量');
+}
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -31,8 +37,21 @@ app.use(session({
   saveUninitialized: false,
   // sameSite=lax：跨站表单 POST 不携带会话 cookie，为后台破坏性操作提供基础 CSRF 防护
   // 生产环境（HTTPS）建议再开启 secure: true（需配合 app.set('trust proxy', 1)）
-  cookie: { httpOnly: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 4 } // 4 小时
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: env === 'production', // 生产环境强制 HTTPS
+    maxAge: 1000 * 60 * 60 * 4 // 4 小时
+  }
 }));
+
+// 生产环境使用反向代理时信任第一层代理
+if (env === 'production') {
+  app.set('trust proxy', 1);
+}
+
+// CSRF 防护（仅管理后台，使用 session 存储 token）
+const csrfProtection = csrf({ cookie: false });
 
 // 健康检查
 app.get('/health', (req, res) => res.json({ status: 'ok', env }));
@@ -48,8 +67,8 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/reports', reportRoutes);
 
-// 管理后台
-app.use('/admin', adminRoutes);
+// 管理后台（应用 CSRF 防护）
+app.use('/admin', csrfProtection, adminRoutes);
 app.get('/', (req, res) => res.redirect('/admin'));
 
 // 404
@@ -64,6 +83,12 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   const isApi = req.path.startsWith('/api/');
 
+  // CSRF token 验证失败
+  if (err.code === 'EBADCSRFTOKEN') {
+    return isApi
+      ? res.status(403).json({ code: 403, message: 'CSRF 验证失败' })
+      : res.status(403).send('无效的请求，请刷新页面后重试');
+  }
   // JSON 请求体解析失败
   if (err.type === 'entity.parse.failed') {
     return isApi
