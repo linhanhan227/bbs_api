@@ -23,12 +23,26 @@ npm install
 
 > 若镜像不可用需临时回退：`npm_config_sqlite3_binary_host_mirror=<其他镜像> npm install`。
 
-### 2. 配置环境变量（可选）
+### 2. 配置环境变量
 
-SQLite（开发 / 测试）零配置即可启动，所有变量都有内置默认值。如需自定义端口、密钥或管理员账号，复制 `.env.example` 为 `.env` 后修改：
+⚠️ **生产环境必须配置强密钥**，否则应用将拒绝启动。开发/测试环境可使用默认值。
+
+复制 `.env.example` 为 `.env` 后修改：
 
 ```bash
 cp .env.example .env
+```
+
+**生产环境必须修改以下配置**：
+
+```bash
+# 生成强随机密钥（至少 32 字符）
+# Linux/Mac: openssl rand -base64 32
+# Node.js: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+
+JWT_SECRET=your-strong-random-secret-at-least-32-chars
+SESSION_SECRET=another-strong-random-secret-at-least-32-chars
+ADMIN_PASSWORD=your-secure-admin-password
 ```
 
 ### 3. 启动
@@ -221,8 +235,8 @@ views/admin/            # 管理后台 EJS 模板
 
 | 参数名 | 位置 | 类型 | 必填 | 说明 |
 |---|---|---|---|---|
-| username | body | string | 是 | 用户名，唯一，最长 32 字符 |
-| password | body | string | 是 | 密码，至少 6 位（bcrypt 加密存储） |
+| username | body | string | 是 | 用户名，唯一，3-32 字符，仅支持字母、数字和下划线 |
+| password | body | string | 是 | 密码，至少 8 位（bcrypt 加密存储） |
 | nickname | body | string | 否 | 昵称，默认同 username，最长 32 字符 |
 | gender | body | string | 否 | `male` / `female` / `secret`，默认 `secret` |
 | age | body | integer | 否 | 年龄 |
@@ -257,7 +271,7 @@ curl -X POST http://localhost:3000/api/auth/register \
 
 | 状态码 | 场景 |
 |---|---|
-| 400 | 用户名或密码为空；密码少于 6 位；字段超长或枚举非法 |
+| 400 | 用户名或密码为空；用户名不符合格式要求；密码少于 8 位；字段超长或枚举非法 |
 | 409 | 用户名已存在 |
 
 ## POST `/api/auth/login` — 登录
@@ -356,10 +370,10 @@ curl "http://localhost:3000/api/users?keyword=爱丽丝&gender=female&page=1&pag
 | nickname | body | string | 否 | 昵称，非空，最长 32 字符 |
 | gender | body | string | 否 | `male` / `female` / `secret` |
 | age | body | integer \| null | 否 | 0-150 的整数，传 `null` 清空 |
-| city | body | string | 否 | 城市 |
-| bio | body | string | 否 | 个人简介 |
-| avatar | body | string | 否 | 头像 URL |
-| password | body | string | 否 | 新密码，至少 6 位（重新 bcrypt 加密） |
+| city | body | string | 否 | 城市，最长 64 字符 |
+| bio | body | string | 否 | 个人简介，最长 500 字符 |
+| avatar | body | string | 否 | 头像 URL，最长 255 字符 |
+| password | body | string | 否 | 新密码，至少 8 位（重新 bcrypt 加密） |
 
 成功响应（200）：
 
@@ -369,7 +383,7 @@ curl "http://localhost:3000/api/users?keyword=爱丽丝&gender=female&page=1&pag
 
 | 状态码 | 场景 |
 |---|---|
-| 400 | 昵称为空 / 超长；gender 非法；age 越界；密码少于 6 位 |
+| 400 | 昵称为空 / 超长；gender 非法；age 越界；city/bio/avatar 超长；密码少于 8 位 |
 
 ## GET `/api/users/:id` — 用户主页
 
@@ -411,7 +425,7 @@ curl "http://localhost:3000/api/users?keyword=爱丽丝&gender=female&page=1&pag
 | 参数名 | 位置 | 类型 | 必填 | 说明 |
 |---|---|---|---|---|
 | userId | body | integer | 是 | 目标用户 ID，不能是自己 |
-| message | body | string | 否 | 申请附言，最长 200 字符 |
+| message | body | string | 否 | 申请附言，字符串类型，最长 200 字符 |
 
 请求示例：
 
@@ -644,8 +658,8 @@ curl -X PUT http://localhost:3000/api/friends/requests/1 \
 
 | 参数名 | 位置 | 类型 | 必填 | 说明 |
 |---|---|---|---|---|
-| content | body | string | 是 | 动态正文，非空 |
-| images | body | string[] | 否 | 图片 URL 数组（存储为 JSON 字符串，读取时还原为数组） |
+| content | body | string | 是 | 动态正文，非空，最长 5000 字符 |
+| images | body | string[] | 否 | 图片 URL 数组，最多 9 张，每个 URL 最长 500 字符（存储为 JSON 字符串，读取时还原为数组） |
 
 请求示例：
 
@@ -672,7 +686,7 @@ curl -X POST http://localhost:3000/api/posts \
 
 | 状态码 | 场景 |
 |---|---|
-| 400 | 内容为空或非字符串；images 不是数组 |
+| 400 | 内容为空、非字符串或超长；images 不是数组、超过 9 张或 URL 非法 |
 
 ## GET `/api/posts` — 动态列表（广场 / 按用户 / 搜索）
 
@@ -846,7 +860,7 @@ curl -X POST http://localhost:3000/api/posts \
 | 参数名 | 位置 | 类型 | 必填 | 说明 |
 |---|---|---|---|---|
 | userId | body | integer | 是 | 接收者用户 ID，必须是好友 |
-| content | body | string | 是 | 消息内容，非空，最长 1000 字 |
+| content | body | string | 是 | 消息内容，字符串类型，非空，最长 1000 字 |
 
 请求示例：
 
@@ -873,7 +887,7 @@ curl -X POST http://localhost:3000/api/messages \
 
 | 状态码 | 场景 |
 |---|---|
-| 400 | 接收者非法或是自己；内容为空 / 超 1000 字 |
+| 400 | 接收者非法或是自己；内容为空、非字符串或超 1000 字 |
 | 403 | 对方已被封禁；存在拉黑关系；不是好友 |
 | 404 | 用户不存在 |
 
@@ -1028,7 +1042,7 @@ curl -X POST http://localhost:3000/api/messages \
 |---|---|---|---|---|
 | targetType | body | string | 是 | `user` / `post` / `comment` |
 | targetId | body | integer | 是 | 被举报对象 ID（正整数） |
-| reason | body | string | 是 | 举报原因，非空，最长 500 字符 |
+| reason | body | string | 是 | 举报原因，字符串类型，非空，最长 500 字符 |
 
 请求示例：
 
@@ -1055,7 +1069,7 @@ curl -X POST http://localhost:3000/api/reports \
 
 | 状态码 | 场景 |
 |---|---|
-| 400 | targetType 非法；targetId 不是正整数；原因为空；举报自己 |
+| 400 | targetType 非法；targetId 不是正整数；原因为空、非字符串或超长；举报自己 |
 | 404 | 举报对象不存在 |
 | 409 | 已举报过，等待处理中 |
 
@@ -1081,7 +1095,12 @@ curl -X POST http://localhost:3000/api/reports \
 
 # 管理后台（`/admin`）
 
-服务端渲染的 EJS 页面，使用 **session 认证**（非 JWT），表单以 `application/x-www-form-urlencoded` 提交，操作完成后重定向回原页面。session 有效期 4 小时，cookie 为 `httpOnly` + `sameSite=lax`（为后台破坏性操作提供基础 CSRF 防护）。
+服务端渲染的 EJS 页面，使用 **session 认证**（非 JWT），表单以 `application/x-www-form-urlencoded` 提交，操作完成后重定向回原页面。session 有效期 4 小时，cookie 为 `httpOnly` + `sameSite=lax`。
+
+⚠️ **CSRF 防护**：管理后台所有破坏性操作（POST 请求）已启用 CSRF Token 验证。所有表单需包含隐藏字段：
+```html
+<input type="hidden" name="_csrf" value="<%= csrfToken %>">
+```
 
 | 方法 | 路径 | 说明 | 参数 |
 |---|---|---|---|
@@ -1123,29 +1142,120 @@ curl -X POST http://localhost:3000/api/reports \
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `3000` | 服务端口 |
-| `JWT_SECRET` | `dev-secret` | JWT 签名密钥（**上线必改**） |
+| `JWT_SECRET` | `dev-secret` | JWT 签名密钥（⚠️ **生产环境必须配置，否则拒绝启动**） |
 | `JWT_EXPIRES_IN` | `7d` | token 有效期 |
-| `SESSION_SECRET` | `dev-session-secret` | 管理后台 session 密钥（**上线必改**） |
+| `SESSION_SECRET` | `dev-session-secret` | 管理后台 session 密钥（⚠️ **生产环境必须配置，否则拒绝启动**） |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / `admin123456` | 初始管理员账号（首次启动时创建，**上线必改**） |
 | `SQLITE_STORAGE` | `./data/community.sqlite` | SQLite 数据文件路径（开发 / 测试） |
 | `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_DATABASE` / `MYSQL_USER` / `MYSQL_PASSWORD` | — | 生产环境 MySQL 连接配置 |
 
 > `NODE_ENV=production` 使用 MySQL，其余（`development` / `test`）使用 SQLite，由 `src/config/database.js` 自动切换。
 
+⚠️ **安全提示**：
+- 生产环境启动时，若未配置 `JWT_SECRET` 或 `SESSION_SECRET`，应用将抛出错误并拒绝启动
+- 密钥长度建议至少 32 字符，使用强随机字符串
+- 初始管理员密码建议修改为至少 16 字符的强密码
+
 ## 切换到 MySQL（正式部署）
 
 1. 创建数据库：`CREATE DATABASE friend_community DEFAULT CHARSET utf8mb4;`
-2. 在 `.env` 中填写 `MYSQL_*` 配置，并修改 `JWT_SECRET` / `SESSION_SECRET` / `ADMIN_PASSWORD`
-3. `npm start`
+2. 在 `.env` 中填写 `MYSQL_*` 配置
+3. **生成并配置强密钥**：
+   ```bash
+   # Linux/Mac
+   openssl rand -base64 32
+   
+   # Windows/Node.js
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   ```
+   将生成的密钥分别填入 `JWT_SECRET` 和 `SESSION_SECRET`
+4. 修改 `ADMIN_PASSWORD` 为强密码（建议至少 16 字符）
+5. `npm start`
+
+应用启动时会自动检查生产环境的密钥配置，未配置将拒绝启动。
 
 ---
 
 # 安全与健壮性设计
 
-- **密码安全**：使用 bcrypt 加密存储（创建 / 改密时自动哈希），接口永不返回 `password` 字段（`toSafeJSON`）。
-- **认证隔离**：API 用无状态 JWT，管理后台用服务端 session；被封禁账号在 API 与后台登录处均被拦截。
-- **CSRF 基础防护**：后台 session cookie 设为 `httpOnly` + `sameSite=lax`，跨站表单 POST 不携带会话 cookie；生产环境（HTTPS）建议再开启 `secure`（需配合 `app.set('trust proxy', 1)`）。
-- **输入校验**：路径 ID 统一校验为正整数（非法直接 400，不进入查询）；对 `content`、`reason` 等先判类型再处理，避免非字符串触发异常导致 500；举报 `targetType` 用 `hasOwnProperty` 校验白名单，防止 `__proto__` / `constructor` 等原型链属性绕过。
-- **数据一致性**：删除动态 / 评论 / 用户、处理举报等涉及多表的操作均在事务中执行级联清理，避免残留孤儿数据。
-- **拉黑访问控制**：任一方向的拉黑都会在交友广场、动态广场、动态详情、点赞、评论、私信、好友申请、关注等入口生效。
-- **上线清单**：务必修改 `.env` 中所有密钥与默认管理员密码；建议部署在 HTTPS 反向代理（如 Nginx）之后，并为 session cookie 开启 `secure`。
+## 已实施的安全措施
+
+### 认证与授权
+- **密码安全**：使用 bcrypt 加密存储（创建 / 改密时自动哈希），接口永不返回 `password` 字段（`toSafeJSON`）
+- **密码强度**：注册和修改密码均要求至少 8 位，统一密码策略
+- **认证隔离**：API 用无状态 JWT，管理后台用服务端 session；被封禁账号在 API 与后台登录处均被拦截
+- **生产环境强制配置**：生产环境启动时强制检查 `JWT_SECRET` 和 `SESSION_SECRET`，未配置将拒绝启动
+
+### CSRF 防护
+- **管理后台 CSRF Token**：所有破坏性操作（POST 请求）均需 CSRF Token 验证
+- **Cookie 安全配置**：session cookie 设为 `httpOnly` + `sameSite=lax`，生产环境自动启用 `secure` 标志
+- **反向代理支持**：生产环境自动信任第一层代理（`trust proxy: 1`）
+
+### 输入验证
+- **路径 ID 校验**：统一校验为正整数（非法直接 400，不进入查询）
+- **类型检查**：对 `content`、`reason`、`message` 等先判类型再处理，避免非字符串触发异常导致 500
+- **长度限制**：
+  - 用户名：3-32 字符，仅支持字母、数字和下划线
+  - 密码：至少 8 位
+  - 昵称：最长 32 字符
+  - 城市：最长 64 字符
+  - 个人简介：最长 500 字符
+  - 头像 URL：最长 255 字符
+  - 动态内容：最长 5000 字符
+  - 图片数组：最多 9 张，每个 URL 最长 500 字符
+  - 私信内容：最长 1000 字符
+  - 好友申请消息：最长 200 字符
+  - 举报原因：最长 500 字符
+- **原型链污染防护**：举报 `targetType` 用 `hasOwnProperty.call()` 校验白名单，防止 `__proto__` / `constructor` 等原型链属性绕过
+- **SQL 注入防护**：LIKE 查询使用 `escapeLike()` 转义 `%`、`_`、`\` 特殊字符
+
+### 数据一致性
+- **事务保护**：删除动态 / 评论 / 用户、处理举报等涉及多表的操作均在事务中执行级联清理，避免残留孤儿数据
+- **级联删除**：
+  - 删除动态：连带删除评论、点赞、收藏、关联通知、针对该动态及其评论的举报
+  - 删除评论：连带删除针对该评论的举报
+  - 删除用户：连带删除其所有数据（动态、评论、点赞、收藏、好友关系、关注、拉黑、私信、通知、相关举报）
+
+### 访问控制
+- **拉黑访问控制**：任一方向的拉黑都会在交友广场、动态广场、动态详情、点赞、评论、私信、好友申请、关注等入口生效
+- **权限校验**：严格区分 403（无权限）和 404（资源不存在），防止信息泄露
+
+## 部署安全清单
+
+### 必须执行的配置
+1. ✅ 修改 `.env` 中的 `JWT_SECRET` 和 `SESSION_SECRET` 为至少 32 字符的强随机字符串
+2. ✅ 修改默认管理员密码 `ADMIN_PASSWORD`（建议至少 16 字符）
+3. ✅ 部署在 HTTPS 反向代理（如 Nginx）之后
+4. ✅ 确保 `NODE_ENV=production` 启动
+
+### 推荐的额外配置
+- 配置 HTTPS 证书（Let's Encrypt）
+- 启用日志监控和告警
+- 定期备份数据库
+- 设置防火墙规则，仅开放必要端口
+- 使用强密码策略管理数据库访问
+
+### Nginx 配置示例
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name example.com;
+    
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+    
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+## 安全审计报告
+
+详细的安全审计和修复记录请查看：
+- `SECURITY_AUDIT.md` - 完整的安全审计报告（15 个问题的详细描述）
+- `SECURITY_FIXES_2.md` - 2026-06-13 安全修复详细说明
