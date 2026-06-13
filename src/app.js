@@ -14,6 +14,7 @@ const postRoutes = require('./routes/posts');
 const messageRoutes = require('./routes/messages');
 const notificationRoutes = require('./routes/notifications');
 const reportRoutes = require('./routes/reports');
+const tagRoutes = require('./routes/tags');
 const adminRoutes = require('./routes/admin');
 
 const app = express();
@@ -66,6 +67,7 @@ app.use('/api/posts', postRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/tags', tagRoutes);
 
 // 管理后台（应用 CSRF 防护）
 app.use('/admin', csrfProtection, adminRoutes);

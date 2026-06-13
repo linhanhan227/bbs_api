@@ -4,7 +4,8 @@ const { Post, Comment, Like, Favorite, User, Block } = require('../models');
 const { authRequired } = require('../middleware/auth');
 const {
   validateIdParam, parsePage, notify, isBlockedBetween,
-  cascadeDeletePosts, cascadeDeleteComments, escapeLike
+  cascadeDeletePosts, cascadeDeleteComments, escapeLike,
+  parseTags, serializeTags
 } = require('../utils/helpers');
 const { sequelize } = require('../config/database');
 
@@ -25,6 +26,7 @@ function parseImages(raw) {
 function serializePost(post, currentUserId) {
   const json = post.toJSON();
   json.images = parseImages(json.images);
+  json.tags = serializeTags(json.tags);
   // likes 可能未被 include（如刚发布的动态）；统一输出 likeCount/liked，保证响应结构一致
   const likes = Array.isArray(json.likes) ? json.likes : [];
   json.likeCount = likes.length;
@@ -36,7 +38,7 @@ function serializePost(post, currentUserId) {
 // 发布动态
 router.post('/', async (req, res, next) => {
   try {
-    const { content, images } = req.body;
+    const { content, images, tags } = req.body;
     // 先判类型：content 非字符串（如客户端误传数字/对象）时 .trim() 会抛异常导致 500
     if (typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ code: 400, message: '内容不能为空' });
@@ -57,10 +59,20 @@ router.post('/', async (req, res, next) => {
         }
       }
     }
+
+    // 解析和校验标签
+    let tagsJson = null;
+    try {
+      tagsJson = parseTags(tags);
+    } catch (err) {
+      return res.status(400).json({ code: 400, message: err.message });
+    }
+
     const post = await Post.create({
       userId: req.user.id,
       content: content.trim(),
-      images: Array.isArray(images) && images.length ? JSON.stringify(images) : null
+      images: Array.isArray(images) && images.length ? JSON.stringify(images) : null,
+      tags: tagsJson
     });
     res.status(201).json({ code: 0, message: '发布成功', data: serializePost(post, req.user.id) });
   } catch (err) { next(err); }
@@ -93,8 +105,8 @@ router.get('/favorites/mine', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// 动态列表（广场，支持按用户筛选 + 关键词搜索）
-// GET /api/posts?userId=&keyword=&page=&pageSize=
+// 动态列表（广场，支持按用户筛选 + 关键词搜索 + 标签筛选）
+// GET /api/posts?userId=&keyword=&tag=&page=&pageSize=
 router.get('/', async (req, res, next) => {
   try {
     const { page, pageSize, offset, limit } = parsePage(req);
@@ -125,6 +137,14 @@ router.get('/', async (req, res, next) => {
     }
     if (req.query.keyword) {
       where.content = { [Op.like]: `%${escapeLike(req.query.keyword)}%` };
+    }
+    // 按标签筛选
+    if (req.query.tag) {
+      const tag = req.query.tag.trim();
+      if (tag) {
+        // 使用 JSON 搜索：tags 字段包含该标签
+        where.tags = { [Op.like]: `%"${escapeLike(tag)}"%` };
+      }
     }
 
     const { rows, count } = await Post.findAndCountAll({

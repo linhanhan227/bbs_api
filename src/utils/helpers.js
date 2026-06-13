@@ -33,6 +33,50 @@ function escapeLike(str) {
   return str.replace(/[%_\\]/g, '\\$&');
 }
 
+// 解析和校验标签数组
+function parseTags(tags) {
+  if (!tags) return null;
+  if (!Array.isArray(tags)) {
+    throw new Error('标签必须是数组');
+  }
+  if (tags.length === 0) return null;
+  if (tags.length > 5) {
+    throw new Error('最多添加 5 个标签');
+  }
+
+  const cleaned = [];
+  const seen = new Set();
+
+  for (const tag of tags) {
+    if (typeof tag !== 'string') {
+      throw new Error('标签必须是字符串');
+    }
+    const trimmed = tag.trim();
+    if (trimmed.length === 0) continue;
+    if (trimmed.length > 20) {
+      throw new Error('标签最长 20 字符');
+    }
+    // 去重
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed);
+      cleaned.push(trimmed);
+    }
+  }
+
+  return cleaned.length > 0 ? JSON.stringify(cleaned) : null;
+}
+
+// 序列化标签（JSON 字符串转数组）
+function serializeTags(tagsJson) {
+  if (!tagsJson) return [];
+  try {
+    const arr = JSON.parse(tagsJson);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
 // 创建通知（自己触发自己的行为不通知；失败不影响主流程）
 async function notify({ userId, type, actorId = null, postId = null, content = null }) {
   if (actorId && actorId === userId) return;
@@ -96,5 +140,6 @@ async function cascadeDeleteComments(commentIds, t) {
 
 module.exports = {
   validateIdParam, parsePage, notify, isBlockedBetween,
-  cascadeDeletePosts, cascadeDeleteComments, escapeLike
+  cascadeDeletePosts, cascadeDeleteComments, escapeLike,
+  parseTags, serializeTags
 };

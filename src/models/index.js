@@ -72,7 +72,8 @@ const Post = sequelize.define('Post', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   userId: { type: DataTypes.INTEGER, allowNull: false },
   content: { type: DataTypes.TEXT, allowNull: false },
-  images: { type: DataTypes.TEXT, allowNull: true } // JSON 数组字符串
+  images: { type: DataTypes.TEXT, allowNull: true }, // JSON 数组字符串
+  tags: { type: DataTypes.STRING(200), allowNull: true } // JSON 数组字符串，如 '["旅行","美食"]'
 }, { tableName: 'posts' });
 
 // ===== 评论 =====
