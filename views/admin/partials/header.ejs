@@ -56,6 +56,7 @@
       <span>
         管理员：<strong><%= admin.nickname || admin.username %></strong>
         <form class="inline" method="post" action="/admin/logout" style="margin-left:12px">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <button class="btn btn-default" type="submit">退出登录</button>
         </form>
       </span>

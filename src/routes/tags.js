@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { Op } = require('sequelize');
 const { Post, User, Like } = require('../models');
 const { authRequired } = require('../middleware/auth');
-const { parsePage, serializeTags } = require('../utils/helpers');
+const { parsePage, serializeTags, escapeLike } = require('../utils/helpers');
 
 const AUTHOR_ATTRS = ['id', 'nickname', 'avatar'];
 
@@ -48,11 +48,17 @@ router.get('/:tag/posts', async (req, res, next) => {
     if (!tag) {
       return res.status(400).json({ code: 400, message: '标签不能为空' });
     }
+    // 防止标签过长导致性能问题
+    if (tag.length > 20) {
+      return res.status(400).json({ code: 400, message: '标签最长 20 字符' });
+    }
 
     const { page, pageSize, offset, limit } = parsePage(req);
 
+    // 使用参数化的 LIKE 查询，防止 SQL 注入
+    const escapedTag = escapeLike(tag);
     const { rows, count } = await Post.findAndCountAll({
-      where: { tags: { [Op.like]: `%"${tag}"%` } },
+      where: { tags: { [Op.like]: `%"${escapedTag}"%` } },
       include: [
         { model: User, as: 'author', attributes: AUTHOR_ATTRS },
         { model: Like, as: 'likes', attributes: ['userId'] }

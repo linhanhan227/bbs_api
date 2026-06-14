@@ -78,7 +78,21 @@ const Post = sequelize.define('Post', {
   originalPostId: { type: DataTypes.INTEGER, allowNull: true },        // 原动态 ID
   repostComment: { type: DataTypes.STRING(500), allowNull: true },     // 转发时的评论
   mentions: { type: DataTypes.TEXT, allowNull: true }                  // 提及的用户 ID 数组，JSON 字符串 '[2,5,8]'
-}, { tableName: 'posts' });
+}, {
+  tableName: 'posts',
+  indexes: [
+    { fields: ['userId', 'createdAt'] },
+    { fields: ['originalPostId'] },
+    { fields: ['isRepost'] },
+    // 防止重复转发：同一用户对同一动态只能转发一次
+    {
+      unique: true,
+      fields: ['userId', 'originalPostId'],
+      where: { isRepost: true },
+      name: 'unique_repost_per_user'
+    }
+  ]
+});
 
 // ===== 评论 =====
 const Comment = sequelize.define('Comment', {
@@ -90,7 +104,15 @@ const Comment = sequelize.define('Comment', {
   rootId: { type: DataTypes.INTEGER, allowNull: true },        // 根评论 ID
   replyToUserId: { type: DataTypes.INTEGER, allowNull: true }, // 回复的目标用户 ID
   mentions: { type: DataTypes.TEXT, allowNull: true }          // 提及的用户 ID 数组，JSON 字符串
-}, { tableName: 'comments' });
+}, {
+  tableName: 'comments',
+  indexes: [
+    { fields: ['postId', 'createdAt'] },
+    { fields: ['userId'] },
+    { fields: ['rootId'] },
+    { fields: ['parentId'] }
+  ]
+});
 
 // ===== 点赞 =====
 const Like = sequelize.define('Like', {
@@ -122,7 +144,13 @@ const Message = sequelize.define('Message', {
   isRecalled: { type: DataTypes.BOOLEAN, defaultValue: false },        // 已撤回
   deletedBySender: { type: DataTypes.BOOLEAN, defaultValue: false },   // 发送方删除（仅对自己隐藏）
   deletedByReceiver: { type: DataTypes.BOOLEAN, defaultValue: false }  // 接收方删除（仅对自己隐藏）
-}, { tableName: 'messages' });
+}, {
+  tableName: 'messages',
+  indexes: [
+    { fields: ['receiverId', 'isRead', 'isRecalled', 'deletedByReceiver'] },
+    { fields: ['senderId', 'receiverId', 'createdAt'] }
+  ]
+});
 
 // ===== 通知 =====
 const Notification = sequelize.define('Notification', {
@@ -136,7 +164,13 @@ const Notification = sequelize.define('Notification', {
   postId: { type: DataTypes.INTEGER, allowNull: true },      // 关联动态（点赞/评论）
   content: { type: DataTypes.STRING(500), allowNull: true },
   isRead: { type: DataTypes.BOOLEAN, defaultValue: false }
-}, { tableName: 'notifications' });
+}, {
+  tableName: 'notifications',
+  indexes: [
+    { fields: ['userId', 'isRead'] },
+    { fields: ['userId', 'createdAt'] }
+  ]
+});
 
 // ===== 举报 =====
 const Report = sequelize.define('Report', {
@@ -147,7 +181,14 @@ const Report = sequelize.define('Report', {
   reason: { type: DataTypes.STRING(500), allowNull: false },
   status: { type: DataTypes.ENUM('pending', 'resolved', 'dismissed'), defaultValue: 'pending' },
   handledAt: { type: DataTypes.DATE, allowNull: true }
-}, { tableName: 'reports' });
+}, {
+  tableName: 'reports',
+  indexes: [
+    { fields: ['status', 'createdAt'] },
+    { fields: ['reporterId'] },
+    { fields: ['targetType', 'targetId'] }
+  ]
+});
 
 // ===== 关联 =====
 User.hasMany(Post, { foreignKey: 'userId', as: 'posts' });

@@ -192,10 +192,25 @@ async function isBlockedBetween(a, b) {
   return !!row;
 }
 
-// 级联删除动态:连带评论、点赞、收藏、关联通知、针对动态/其评论的举报，最后删动态本身。
+// 级联删除动态:连带评论、点赞、收藏、关联通知、针对动态/其评论的举报、转发动态，最后删动态本身。
 // 必须在事务中调用，保证一致性（各删除接口共用此逻辑，避免行为分叉）。
 async function cascadeDeletePosts(postIds, t) {
   if (!postIds || !postIds.length) return;
+
+  // 1. 查找所有转发了这些动态的转发动态
+  const repostPosts = await Post.findAll({
+    where: { originalPostId: { [Op.in]: postIds }, isRepost: true },
+    attributes: ['id'],
+    transaction: t
+  });
+  const repostIds = repostPosts.map(p => p.id);
+
+  // 2. 递归删除转发动态
+  if (repostIds.length > 0) {
+    await cascadeDeletePosts(repostIds, t);
+  }
+
+  // 3. 查找动态下的所有评论
   const comments = await Comment.findAll({
     where: { postId: { [Op.in]: postIds } },
     attributes: ['id'],
@@ -203,11 +218,13 @@ async function cascadeDeletePosts(postIds, t) {
   });
   const commentIds = comments.map(c => c.id);
 
-  // 同一事务绑定单条连接，逐条顺序执行（避免在同一连接上并发多条语句的反模式）
+  // 4. 删除评论和关联数据（顺序执行，避免并发）
   await Comment.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t });
   await Like.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t });
   await Favorite.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t });
   await Notification.destroy({ where: { postId: { [Op.in]: postIds } }, transaction: t });
+
+  // 5. 删除相关举报
   await Report.destroy({
     where: {
       [Op.or]: [
@@ -217,6 +234,8 @@ async function cascadeDeletePosts(postIds, t) {
     },
     transaction: t
   });
+
+  // 6. 最后删除动态本身
   await Post.destroy({ where: { id: { [Op.in]: postIds } }, transaction: t });
 }
 

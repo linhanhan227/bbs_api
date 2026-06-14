@@ -1,8 +1,9 @@
 const router = require('express').Router();
 const { Op } = require('sequelize');
-const { Block, User, Friendship, Follow } = require('../models');
+const { Block, User, Friendship, Follow, Message } = require('../models');
 const { authRequired } = require('../middleware/auth');
 const { validateIdParam, parsePage } = require('../utils/helpers');
+const { sequelize } = require('../config/database');
 
 const USER_ATTRS = ['id', 'nickname', 'gender', 'avatar'];
 
@@ -35,29 +36,57 @@ router.put('/:userId', validateIdParam('userId'), async (req, res, next) => {
     const target = await User.findOne({ where: { id: targetId, role: 'user' } });
     if (!target) return res.status(404).json({ code: 404, message: '用户不存在' });
 
-    const [, created] = await Block.findOrCreate({
-      where: { userId: req.user.id, blockedId: targetId }
+    // 使用事务保证拉黑操作的原子性
+    await sequelize.transaction(async (t) => {
+      const [, created] = await Block.findOrCreate({
+        where: { userId: req.user.id, blockedId: targetId },
+        transaction: t
+      });
+
+      if (created) {
+        // 删除好友关系
+        await Friendship.destroy({
+          where: {
+            [Op.or]: [
+              { requesterId: req.user.id, addresseeId: targetId },
+              { requesterId: targetId, addresseeId: req.user.id }
+            ]
+          },
+          transaction: t
+        });
+
+        // 删除关注关系
+        await Follow.destroy({
+          where: {
+            [Op.or]: [
+              { followerId: req.user.id, followingId: targetId },
+              { followerId: targetId, followingId: req.user.id }
+            ]
+          },
+          transaction: t
+        });
+
+        // 标记私信为双方已删除（保留审计记录，不物理删除）
+        await Message.update(
+          { deletedBySender: true, deletedByReceiver: true },
+          {
+            where: {
+              [Op.or]: [
+                { senderId: req.user.id, receiverId: targetId },
+                { senderId: targetId, receiverId: req.user.id }
+              ]
+            },
+            transaction: t
+          }
+        );
+      }
+
+      res.status(created ? 201 : 200).json({
+        code: 0,
+        message: created ? '已拉黑' : '已在黑名单中',
+        data: { blocked: true }
+      });
     });
-    if (created) {
-      // 解除既有关系
-      await Friendship.destroy({
-        where: {
-          [Op.or]: [
-            { requesterId: req.user.id, addresseeId: targetId },
-            { requesterId: targetId, addresseeId: req.user.id }
-          ]
-        }
-      });
-      await Follow.destroy({
-        where: {
-          [Op.or]: [
-            { followerId: req.user.id, followingId: targetId },
-            { followerId: targetId, followingId: req.user.id }
-          ]
-        }
-      });
-    }
-    res.status(created ? 201 : 200).json({ code: 0, message: created ? '已拉黑' : '已在黑名单中', data: { blocked: true } });
   } catch (err) { next(err); }
 });
 

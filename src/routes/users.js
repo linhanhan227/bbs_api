@@ -96,6 +96,9 @@ router.put('/me', async (req, res, next) => {
       if (typeof req.body.password !== 'string' || req.body.password.length < 8) {
         return res.status(400).json({ code: 400, message: '密码至少 8 位' });
       }
+      if (req.body.password.length > 128) {
+        return res.status(400).json({ code: 400, message: '密码最长 128 位' });
+      }
       req.user.password = req.body.password;
     }
     await req.user.save();

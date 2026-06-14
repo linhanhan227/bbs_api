@@ -280,28 +280,24 @@ router.post('/:id/repost', validateIdParam('id'), async (req, res, next) => {
       return res.status(400).json({ code: 400, message: '不能转发转发动态，请转发原动态' });
     }
 
-    // 检查是否已转发过（可选限制）
-    const existingRepost = await Post.findOne({
+    // 使用 findOrCreate 保证幂等性，配合数据库唯一索引防止并发重复转发
+    const [repost, created] = await Post.findOrCreate({
       where: {
         userId: req.user.id,
         originalPostId: originalPost.id,
         isRepost: true
+      },
+      defaults: {
+        content: originalPost.content,
+        images: originalPost.images,
+        tags: originalPost.tags,
+        repostComment: comment ? comment.trim() : null
       }
     });
-    if (existingRepost) {
+
+    if (!created) {
       return res.status(409).json({ code: 409, message: '你已转发过该动态' });
     }
-
-    // 创建转发动态
-    const repost = await Post.create({
-      userId: req.user.id,
-      content: originalPost.content, // 继承原动态内容
-      images: originalPost.images,   // 继承原动态图片
-      tags: originalPost.tags,       // 继承原动态标签
-      isRepost: true,
-      originalPostId: originalPost.id,
-      repostComment: comment ? comment.trim() : null
-    });
 
     // 通知原作者
     if (originalPost.userId !== req.user.id) {

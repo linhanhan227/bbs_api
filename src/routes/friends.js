@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const { Friendship, User } = require('../models');
 const { authRequired } = require('../middleware/auth');
 const { validateIdParam, parsePage, notify, isBlockedBetween } = require('../utils/helpers');
+const { sequelize } = require('../config/database');
 
 const USER_ATTRS = ['id', 'nickname', 'gender', 'age', 'city', 'avatar'];
 
@@ -34,36 +35,43 @@ router.post('/requests', async (req, res, next) => {
       return res.status(403).json({ code: 403, message: '无法向该用户发送好友申请' });
     }
 
-    // 查找双向所有状态的既有关系
-    const existing = await Friendship.findOne({
-      where: {
-        [Op.or]: [
-          { requesterId: req.user.id, addresseeId: targetId },
-          { requesterId: targetId, addresseeId: req.user.id }
-        ]
-      }
-    });
+    // 查找双向所有状态的既有关系（使用事务和行锁防止并发竞态）
+    await sequelize.transaction(async (t) => {
+      const existing = await Friendship.findOne({
+        where: {
+          [Op.or]: [
+            { requesterId: req.user.id, addresseeId: targetId },
+            { requesterId: targetId, addresseeId: req.user.id }
+          ]
+        },
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      });
 
-    if (existing) {
-      if (existing.status === 'accepted') {
-        return res.status(409).json({ code: 409, message: '你们已经是好友了' });
+      if (existing) {
+        if (existing.status === 'accepted') {
+          return res.status(409).json({ code: 409, message: '你们已经是好友了' });
+        }
+        if (existing.status === 'pending') {
+          if (existing.requesterId === req.user.id) {
+            return res.status(409).json({ code: 409, message: '你已发送过申请，请等待对方处理' });
+          } else {
+            return res.status(409).json({ code: 409, message: '对方已向你发送好友申请，请前往申请列表处理' });
+          }
+        }
+        // rejected：删除旧记录，创建新申请（避免方向混乱）
+        await existing.destroy({ transaction: t });
       }
-      if (existing.status === 'pending') {
-        return res.status(409).json({ code: 409, message: '已有待处理的好友申请' });
-      }
-      // rejected：复用记录重新发起（避免唯一索引冲突），并修正申请方向
-      existing.requesterId = req.user.id;
-      existing.addresseeId = targetId;
-      existing.status = 'pending';
-      existing.message = message || null;
-      await existing.save();
+
+      const fr = await Friendship.create({
+        requesterId: req.user.id,
+        addresseeId: targetId,
+        message
+      }, { transaction: t });
+
       await notify({ userId: targetId, type: 'friend_request', actorId: req.user.id, content: message || null });
-      return res.status(201).json({ code: 0, message: '好友申请已发送', data: existing });
-    }
-
-    const fr = await Friendship.create({ requesterId: req.user.id, addresseeId: targetId, message });
-    await notify({ userId: targetId, type: 'friend_request', actorId: req.user.id, content: message || null });
-    res.status(201).json({ code: 0, message: '好友申请已发送', data: fr });
+      res.status(201).json({ code: 0, message: '好友申请已发送', data: fr });
+    });
   } catch (err) { next(err); }
 });
 

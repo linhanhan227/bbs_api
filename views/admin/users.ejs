@@ -29,12 +29,14 @@
         <td><%= u.createdAt.toLocaleString('zh-CN') %></td>
         <td>
           <form class="inline" method="post" action="/admin/users/<%= u.id %>/toggle-ban">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <button class="btn <%= u.status === 'active' ? 'btn-warn' : 'btn-primary' %>" type="submit">
               <%= u.status === 'active' ? '封禁' : '解封' %>
             </button>
           </form>
           <form class="inline" method="post" action="/admin/users/<%= u.id %>/delete"
                 onsubmit="return confirm('确定删除用户 <%= u.username %> 及其全部内容？此操作不可恢复！')">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <button class="btn btn-danger" type="submit">删除</button>
           </form>
         </td>

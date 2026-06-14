@@ -21,8 +21,14 @@ router.post('/login', async (req, res, next) => {
     if (!user || !(await user.checkPassword(password || ''))) {
       return res.render('admin/login', { error: '用户名或密码错误', csrfToken: req.csrfToken() });
     }
-    req.session.admin = { id: user.id, username: user.username, nickname: user.nickname };
-    res.redirect('/admin');
+
+    // 重新生成 session ID，防止会话固定攻击
+    const adminData = { id: user.id, username: user.username, nickname: user.nickname };
+    req.session.regenerate((err) => {
+      if (err) return next(err);
+      req.session.admin = adminData;
+      res.redirect('/admin');
+    });
   } catch (err) { next(err); }
 });
 
@@ -261,23 +267,57 @@ router.get('/reports', async (req, res, next) => {
       limit: pageSize
     });
 
-    // 补充举报对象摘要
-    const reports = await Promise.all(rows.map(async (r) => {
+    // 批量预加载举报目标（优化 N+1 查询）
+    const userIds = new Set();
+    const postIds = new Set();
+    const commentIds = new Set();
+
+    for (const r of rows) {
+      if (r.targetType === 'user') userIds.add(r.targetId);
+      else if (r.targetType === 'post') postIds.add(r.targetId);
+      else if (r.targetType === 'comment') commentIds.add(r.targetId);
+    }
+
+    // 批量查询（3次查询代替 N 次）
+    const [users, posts, comments] = await Promise.all([
+      userIds.size > 0 ? User.findAll({
+        where: { id: [...userIds] },
+        attributes: ['id', 'username', 'nickname', 'status']
+      }) : [],
+      postIds.size > 0 ? Post.findAll({
+        where: { id: [...postIds] },
+        attributes: ['id', 'content']
+      }) : [],
+      commentIds.size > 0 ? Comment.findAll({
+        where: { id: [...commentIds] },
+        attributes: ['id', 'content']
+      }) : []
+    ]);
+
+    // 构建映射
+    const userMap = new Map(users.map(u => [u.id, u]));
+    const postMap = new Map(posts.map(p => [p.id, p]));
+    const commentMap = new Map(comments.map(c => [c.id, c]));
+
+    // 组装结果
+    const reports = rows.map(r => {
       const json = r.toJSON();
       let summary = '（已删除）';
+
       if (r.targetType === 'user') {
-        const u = await User.findByPk(r.targetId, { attributes: ['username', 'nickname', 'status'] });
+        const u = userMap.get(r.targetId);
         if (u) summary = `${u.nickname} (${u.username}) [${u.status === 'banned' ? '已封禁' : '正常'}]`;
       } else if (r.targetType === 'post') {
-        const p = await Post.findByPk(r.targetId, { attributes: ['content'] });
+        const p = postMap.get(r.targetId);
         if (p) summary = p.content.slice(0, 60);
       } else if (r.targetType === 'comment') {
-        const c = await Comment.findByPk(r.targetId, { attributes: ['content'] });
+        const c = commentMap.get(r.targetId);
         if (c) summary = c.content.slice(0, 60);
       }
+
       json.targetSummary = summary;
       return json;
-    }));
+    });
 
     res.render('admin/reports', {
       admin: req.session.admin,

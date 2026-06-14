@@ -18,6 +18,9 @@ router.post('/register', async (req, res, next) => {
     if (password.length < 8) {
       return res.status(400).json({ code: 400, message: '密码至少 8 位' });
     }
+    if (password.length > 128) {
+      return res.status(400).json({ code: 400, message: '密码最长 128 位' });
+    }
     const exists = await User.findOne({ where: { username } });
     if (exists) return res.status(409).json({ code: 409, message: '用户名已存在' });
 

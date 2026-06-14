@@ -7,15 +7,25 @@ const PORT = process.env.PORT || 3000;
 
 async function ensureAdmin() {
   const username = process.env.ADMIN_USERNAME || 'admin';
+
+  // 生产环境强制配置管理员密码
+  if (env === 'production' && !process.env.ADMIN_PASSWORD) {
+    throw new Error('生产环境必须配置 ADMIN_PASSWORD 环境变量');
+  }
+
   const exists = await User.findOne({ where: { role: 'admin' } });
   if (!exists) {
+    const password = process.env.ADMIN_PASSWORD || 'admin123456';
     await User.create({
       username,
-      password: process.env.ADMIN_PASSWORD || 'admin123456',
+      password,
       nickname: '管理员',
       role: 'admin'
     });
-    console.log(`[init] 已创建默认管理员账号: ${username}`);
+    // 仅开发环境输出默认账号信息
+    if (env !== 'production') {
+      console.log(`[init] 已创建默认管理员账号: ${username}`);
+    }
   }
 }
 

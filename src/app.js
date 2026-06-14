@@ -5,6 +5,7 @@ const session = require('express-session');
 const csrf = require('csurf');
 
 const { env } = require('./config/database');
+const { apiLimiter, authLimiter, createLimiter } = require('./middleware/rateLimit');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const friendRoutes = require('./routes/friends');
@@ -57,19 +58,32 @@ const csrfProtection = csrf({ cookie: false });
 // 健康检查
 app.get('/health', (req, res) => res.json({ status: 'ok', env }));
 
+// 应用速率限制
+app.use('/api/', apiLimiter);
+
 // API 路由
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/friends', friendRoutes);
 app.use('/api/follows', followRoutes);
 app.use('/api/blocks', blockRoutes);
+
+// 写操作限制
+app.post('/api/posts', createLimiter);
+app.post('/api/posts/:id/comments', createLimiter);
+app.post('/api/messages', createLimiter);
+app.post('/api/reports', createLimiter);
+
 app.use('/api/posts', postRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/tags', tagRoutes);
 
-// 管理后台（应用 CSRF 防护）
+// 管理后台（应用 CSRF 防护和认证限制）
+app.post('/admin/login', authLimiter);
 app.use('/admin', csrfProtection, adminRoutes);
 app.get('/', (req, res) => res.redirect('/admin'));
 

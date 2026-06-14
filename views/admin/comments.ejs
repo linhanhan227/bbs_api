@@ -22,6 +22,7 @@
         <td>
           <form class="inline" method="post" action="/admin/comments/<%= c.id %>/delete"
                 onsubmit="return confirm('确定删除这条评论？')">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <button class="btn btn-danger" type="submit">删除</button>
           </form>
         </td>
